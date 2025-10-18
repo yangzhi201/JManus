@@ -122,17 +122,6 @@
             </button>
           </div>
 
-          <!-- Section 1: Plan Generator -->
-          <PlanGenerator
-            :generator-prompt="sidebarStore.generatorPrompt"
-            :json-content="sidebarStore.jsonContent"
-            :is-generating="sidebarStore.isGenerating"
-            :plan-type="sidebarStore.planType"
-            @generate-plan="handleGeneratePlan"
-            @update-plan="handleUpdatePlan"
-            @update-generator-prompt="handleUpdateGeneratorPrompt"
-            @update-plan-type="handleUpdatePlanType"
-          />
 
           <!-- Section 2: JSON Editor (Conditional based on plan type) -->
           <!-- Use JsonEditorV2 for dynamic_agent type -->
@@ -216,7 +205,6 @@ import JsonEditor from './JsonEditor.vue'
 import JsonEditorV2 from './JsonEditorV2.vue'
 import ExecutionController from './ExecutionController.vue'
 import type { PlanExecutionRequestPayload } from '@/types/plan-execution'
-import PlanGenerator from './PlanGenerator.vue'
 import { useToast } from '@/plugins/useToast'
 
 const { t } = useI18n()
@@ -319,25 +307,7 @@ const refreshParameterRequirements = async () => {
   }
 }
 
-const handleGeneratePlan = async () => {
-  try {
-    await sidebarStore.generatePlan()
-    toast.success(t('sidebar.generateSuccess', { templateId: sidebarStore.selectedTemplate?.id ?? t('sidebar.unknown') }))
-  } catch (error: any) {
-    console.error('Failed to generate plan:', error)
-    toast.error(t('sidebar.generateFailed') + ': ' + error.message)
-  }
-}
 
-const handleUpdatePlan = async () => {
-  try {
-    await sidebarStore.updatePlan()
-    toast.success(t('sidebar.updateSuccess'))
-  } catch (error: any) {
-    console.error('Failed to update plan:', error)
-    toast.error(t('sidebar.updateFailed') + ': ' + error.message)
-  }
-}
 
 // Version control handlers
 const handleRollback = () => {
@@ -383,34 +353,33 @@ const handleExecutePlan = async (payload: PlanExecutionRequestPayload) => {
       return
     }
 
+    // Always use the prepared plan data (which includes planTemplateId)
     // Add replacement parameters to plan data if provided
+    const finalPlanData = {
+      ...planData,
+      uploadedFiles: payload.uploadedFiles,
+      uploadKey: payload.uploadKey
+    }
+    
     if (payload.replacementParams && Object.keys(payload.replacementParams).length > 0) {
       console.log('[Sidebar] 🔄 Processing replacement parameters:', payload.replacementParams)
-      // Create a new object with replacementParams instead of mutating the original
-      const planDataWithParams = {
-        ...planData,
-        replacementParams: payload.replacementParams,
-        uploadedFiles: payload.uploadedFiles,
-        uploadKey: payload.uploadKey
-      }
-      console.log('[Sidebar] ✅ Enhanced plan data with params:', JSON.stringify(planDataWithParams, null, 2))
-      // Use the enhanced plan data for the payload
-      const enhancedPayload: PlanExecutionRequestPayload = {
-        ...payload,
-        title: planDataWithParams.title,
-        planData: planDataWithParams.planData,
-        params: planDataWithParams.params,
-        uploadedFiles: planDataWithParams.uploadedFiles,
-        uploadKey: planDataWithParams.uploadKey
-      }
-      
-      console.log('[Sidebar] 📤 Emitting planExecutionRequested with enhanced payload:', JSON.stringify(enhancedPayload, null, 2))
-      emit('planExecutionRequested', enhancedPayload)
-      return
+      finalPlanData.replacementParams = payload.replacementParams
     }
-
-    console.log('[Sidebar] 📤 Emitting planExecutionRequested with original payload:', JSON.stringify(payload, null, 2))
-    emit('planExecutionRequested', payload)
+    
+    console.log('[Sidebar] ✅ Final plan data:', JSON.stringify(finalPlanData, null, 2))
+    
+    // Use the prepared plan data for the payload
+    const finalPayload: PlanExecutionRequestPayload = {
+      ...payload,
+      title: finalPlanData.title,
+      planData: finalPlanData.planData,
+      params: finalPlanData.params,
+      uploadedFiles: finalPlanData.uploadedFiles,
+      uploadKey: finalPlanData.uploadKey
+    }
+    
+    console.log('[Sidebar] 📤 Emitting planExecutionRequested with final payload:', JSON.stringify(finalPayload, null, 2))
+    emit('planExecutionRequested', finalPayload)
 
     console.log('[Sidebar] ✅ Event emitted successfully')
   } catch (error: any) {
@@ -483,14 +452,7 @@ const handleUpdateExecutionParams = (params: string) => {
   sidebarStore.executionParams = params
 }
 
-// Plan Generator event handlers
-const handleUpdateGeneratorPrompt = (prompt: string) => {
-  sidebarStore.generatorPrompt = prompt
-}
 
-const handleUpdatePlanType = (planType: string) => {
-  sidebarStore.planType = planType
-}
 
 // Load tool information when plan template changes
 const loadToolInfo = async (planTemplateId: string | null) => {

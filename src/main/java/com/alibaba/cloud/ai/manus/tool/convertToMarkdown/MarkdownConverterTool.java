@@ -21,7 +21,6 @@ import com.alibaba.cloud.ai.manus.tool.filesystem.UnifiedDirectoryManager;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationContext;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -41,11 +40,15 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 
 	private final UnifiedDirectoryManager directoryManager;
 
-	private final ApplicationContext applicationContext;
+	private final PdfOcrProcessor ocrProcessor;
 
-	public MarkdownConverterTool(UnifiedDirectoryManager directoryManager, ApplicationContext applicationContext) {
+	private final ImageOcrProcessor imageOcrProcessor;
+
+	public MarkdownConverterTool(UnifiedDirectoryManager directoryManager, PdfOcrProcessor ocrProcessor,
+			ImageOcrProcessor imageOcrProcessor) {
 		this.directoryManager = directoryManager;
-		this.applicationContext = applicationContext;
+		this.ocrProcessor = ocrProcessor;
+		this.imageOcrProcessor = imageOcrProcessor;
 	}
 
 	/**
@@ -111,10 +114,11 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 				case "doc", "docx" -> processWordToMarkdown(sourceFile, additionalRequirement);
 				case "xlsx", "xls" -> processExcelToMarkdown(sourceFile, additionalRequirement);
 				case "pdf" -> processPdfToMarkdown(sourceFile, additionalRequirement);
+				case "jpg", "jpeg", "png", "gif" -> processImageToMarkdown(sourceFile, additionalRequirement);
 				case "txt", "md", "json", "xml", "yaml", "yml", "log", "java", "py", "js", "html", "css" ->
 					processTextToMarkdown(sourceFile, additionalRequirement);
 				default -> new ToolExecuteResult("Error: Unsupported file type: " + extension
-						+ ". Supported types: .doc, .docx, .xlsx, .xls, .pdf, .txt, .md, .json, .xml, .yaml, .yml, .log, .java, .py, .js, .html, .css");
+						+ ". Supported types: .doc, .docx, .xlsx, .xls, .pdf, .jpg, .jpeg, .png, .gif, .txt, .md, .json, .xml, .yaml, .yml, .log, .java, .py, .js, .html, .css");
 			};
 
 		}
@@ -129,7 +133,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	 */
 	private ToolExecuteResult processWordToMarkdown(Path sourceFile, String additionalRequirement) {
 		try {
-			WordToMarkdownProcessor processor = new WordToMarkdownProcessor(directoryManager, applicationContext);
+			WordToMarkdownProcessor processor = new WordToMarkdownProcessor(directoryManager);
 			return processor.convertToMarkdown(sourceFile, additionalRequirement, currentPlanId);
 		}
 		catch (Exception e) {
@@ -143,7 +147,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	 */
 	private ToolExecuteResult processExcelToMarkdown(Path sourceFile, String additionalRequirement) {
 		try {
-			ExcelToMarkdownProcessor processor = new ExcelToMarkdownProcessor(directoryManager, applicationContext);
+			ExcelToMarkdownProcessor processor = new ExcelToMarkdownProcessor(directoryManager);
 			return processor.convertToMarkdown(sourceFile, additionalRequirement, currentPlanId);
 		}
 		catch (Exception e) {
@@ -157,7 +161,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	 */
 	private ToolExecuteResult processPdfToMarkdown(Path sourceFile, String additionalRequirement) {
 		try {
-			PdfToMarkdownProcessor processor = new PdfToMarkdownProcessor(directoryManager, applicationContext);
+			PdfToMarkdownProcessor processor = new PdfToMarkdownProcessor(directoryManager, ocrProcessor);
 			return processor.convertToMarkdown(sourceFile, additionalRequirement, currentPlanId);
 		}
 		catch (Exception e) {
@@ -167,11 +171,31 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	}
 
 	/**
+	 * Process image files to Markdown using OCR
+	 */
+	private ToolExecuteResult processImageToMarkdown(Path sourceFile, String additionalRequirement) {
+		try {
+			if (imageOcrProcessor == null) {
+				return new ToolExecuteResult("Error: Image OCR processor is not available");
+			}
+
+			// Generate markdown filename
+			String markdownFilename = generateMarkdownFilename(sourceFile.getFileName().toString());
+			return imageOcrProcessor.convertImageToTextWithOcr(sourceFile, additionalRequirement, currentPlanId,
+					markdownFilename);
+		}
+		catch (Exception e) {
+			log.error("Image to Markdown conversion failed: {}", sourceFile.getFileName(), e);
+			return new ToolExecuteResult("Image conversion error: " + e.getMessage());
+		}
+	}
+
+	/**
 	 * Process text files to Markdown
 	 */
 	private ToolExecuteResult processTextToMarkdown(Path sourceFile, String additionalRequirement) {
 		try {
-			TextToMarkdownProcessor processor = new TextToMarkdownProcessor(directoryManager, applicationContext);
+			TextToMarkdownProcessor processor = new TextToMarkdownProcessor(directoryManager);
 			return processor.convertToMarkdown(sourceFile, additionalRequirement, currentPlanId);
 		}
 		catch (Exception e) {
@@ -234,6 +258,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 				+ "**Core Strategy**: For Word documents (.doc, .docx), Excel files (.xlsx, .xls), and PDF files, "
 				+ "strictly follows a Markdown-first approach - first converts to Markdown format, "
 				+ "then processes the content for optimal readability and structure. "
+				+ "Supports image files (.jpg, .jpeg, .png, .gif) using OCR processing to extract text content. "
 				+ "Supports text files (.txt, .md, .json, .xml, .yaml, .yml, .log, .java, .py, .js, .html, .css) "
 				+ "with type-specific formatting. "
 				+ "The converted file will be saved with .md extension in the current plan directory. "
@@ -263,13 +288,13 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	@Override
 	public String getCurrentToolStateString() {
 		return String.format(
-				"MarkdownConverterTool State:\n- Current Plan ID: %s\n- Supported File Types: .doc, .docx, .xlsx, .xls, .pdf, .txt, .md, .json, .xml, .yaml, .yml, .log, .java, .py, .js, .html, .css",
+				"MarkdownConverterTool State:\n- Current Plan ID: %s\n- Supported File Types: .doc, .docx, .xlsx, .xls, .pdf, .jpg, .jpeg, .png, .gif, .txt, .md, .json, .xml, .yaml, .yml, .log, .java, .py, .js, .html, .css",
 				currentPlanId);
 	}
 
 	@Override
 	public String getServiceGroup() {
-		return "convertToMarkdown-service-group";
+		return "default-service-group";
 	}
 
 	@Override

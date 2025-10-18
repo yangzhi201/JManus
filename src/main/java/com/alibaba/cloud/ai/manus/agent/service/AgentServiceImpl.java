@@ -43,10 +43,10 @@ import com.alibaba.cloud.ai.manus.prompt.service.PromptService;
 import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
 import com.alibaba.cloud.ai.manus.runtime.service.UserInputService;
-import com.alibaba.cloud.ai.manus.planning.IPlanningFactory;
+import com.alibaba.cloud.ai.manus.planning.PlanningFactory;
 import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
 import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
-import com.alibaba.cloud.ai.manus.llm.ILlmService;
+import com.alibaba.cloud.ai.manus.llm.LlmService;
 import com.alibaba.cloud.ai.manus.mcp.service.IMcpService;
 import com.alibaba.cloud.ai.manus.model.entity.DynamicModelEntity;
 import com.alibaba.cloud.ai.manus.model.model.vo.ModelConfig;
@@ -60,7 +60,7 @@ public class AgentServiceImpl implements AgentService {
 
 	private final DynamicAgentRepository repository;
 
-	private final IPlanningFactory planningFactory;
+	private final PlanningFactory planningFactory;
 
 	private final IMcpService mcpService;
 
@@ -82,7 +82,7 @@ public class AgentServiceImpl implements AgentService {
 
 	@Autowired
 	@Lazy
-	private ILlmService llmService;
+	private LlmService llmService;
 
 	@Autowired
 	@Lazy
@@ -92,7 +92,7 @@ public class AgentServiceImpl implements AgentService {
 	private String namespace;
 
 	@Autowired
-	public AgentServiceImpl(DynamicAgentRepository repository, @Lazy IPlanningFactory planningFactory,
+	public AgentServiceImpl(DynamicAgentRepository repository, @Lazy PlanningFactory planningFactory,
 			@Lazy IMcpService mcpService, NamespaceService namespaceService, PlanExecutionRecorder recorder,
 			ManusProperties properties, UserInputService userInputService, PromptService promptService,
 			StreamingResponseHandler streamingResponseHandler, PlanIdDispatcher planIdDispatcher,
@@ -193,7 +193,7 @@ public class AgentServiceImpl implements AgentService {
 	}
 
 	private DynamicAgent loadAgent(String agentName, Map<String, Object> initialAgentSetting, ExecutionStep step,
-			List<String> selectedToolKeys, DynamicModelEntity modelEntity) {
+			List<String> selectedToolKeys, String modelName) {
 
 		// Check if this is a ConfigurableDynaAgent
 		if ("ConfigurableDynaAgent".equals(agentName)) {
@@ -201,17 +201,9 @@ public class AgentServiceImpl implements AgentService {
 			String description = "A configurable dynamic agent";
 			String nextStepPrompt = "Based on the current environment information and prompt to make a next step decision";
 
-			// Use the provided modelEntity directly
-			if (modelEntity != null) {
-				log.info("Using provided model entity for ConfigurableDynaAgent: {}", modelEntity.getModelName());
-			}
-			else {
-				log.info("No model entity provided for ConfigurableDynaAgent, using null model");
-			}
-
 			return new ConfigurableDynaAgent(llmService, recorder, properties, name, description, nextStepPrompt,
 					selectedToolKeys, toolCallingManager, initialAgentSetting, userInputService, promptService,
-					modelEntity, streamingResponseHandler, step, planIdDispatcher, jmanusEventPublisher);
+					modelName, streamingResponseHandler, step, planIdDispatcher, jmanusEventPublisher);
 		}
 
 		DynamicAgentEntity entity = repository.findByNamespaceAndAgentName(namespace, agentName);
@@ -221,8 +213,8 @@ public class AgentServiceImpl implements AgentService {
 
 		return new DynamicAgent(llmService, recorder, properties, entity.getAgentName(), entity.getAgentDescription(),
 				entity.getNextStepPrompt(), entity.getAvailableToolKeys(), toolCallingManager, initialAgentSetting,
-				userInputService, promptService, entity.getModel(), streamingResponseHandler, step, planIdDispatcher,
-				jmanusEventPublisher);
+				userInputService, promptService, entity.getModel().getModelName(), streamingResponseHandler, step,
+				planIdDispatcher, jmanusEventPublisher);
 	}
 
 	public List<DynamicAgentEntity> getAllAgents() {
@@ -351,14 +343,14 @@ public class AgentServiceImpl implements AgentService {
 
 	@Override
 	public BaseAgent createDynamicBaseAgent(String name, String planId, String rootPlanId,
-			Map<String, Object> initialAgentSetting, String expectedReturnInfo, ExecutionStep step,
-			DynamicModelEntity modelEntity, List<String> selectedToolKeys) {
+			Map<String, Object> initialAgentSetting, String expectedReturnInfo, ExecutionStep step, String modelName,
+			List<String> selectedToolKeys) {
 
 		log.info("Create new BaseAgent: {}, planId: {}", name, planId);
 
 		try {
 			// Load existing Agent through local loadAgent method
-			DynamicAgent agent = loadAgent(name, initialAgentSetting, step, selectedToolKeys, modelEntity);
+			DynamicAgent agent = loadAgent(name, initialAgentSetting, step, selectedToolKeys, modelName);
 
 			// Set planId
 			agent.setCurrentPlanId(planId);

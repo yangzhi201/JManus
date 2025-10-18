@@ -17,9 +17,8 @@ package com.alibaba.cloud.ai.manus.agent;
 
 import com.alibaba.cloud.ai.manus.config.ManusProperties;
 import com.alibaba.cloud.ai.manus.event.JmanusEventPublisher;
-import com.alibaba.cloud.ai.manus.llm.ILlmService;
+import com.alibaba.cloud.ai.manus.llm.LlmService;
 import com.alibaba.cloud.ai.manus.llm.StreamingResponseHandler;
-import com.alibaba.cloud.ai.manus.model.entity.DynamicModelEntity;
 import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
 import com.alibaba.cloud.ai.manus.prompt.service.PromptService;
 import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
@@ -66,14 +65,14 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 	 * @param step Execution step
 	 * @param planIdDispatcher Plan ID dispatcher
 	 */
-	public ConfigurableDynaAgent(ILlmService llmService, PlanExecutionRecorder planExecutionRecorder,
+	public ConfigurableDynaAgent(LlmService llmService, PlanExecutionRecorder planExecutionRecorder,
 			ManusProperties manusProperties, String name, String description, String nextStepPrompt,
 			List<String> availableToolKeys, ToolCallingManager toolCallingManager,
 			Map<String, Object> initialAgentSetting, UserInputService userInputService, PromptService promptService,
-			DynamicModelEntity model, StreamingResponseHandler streamingResponseHandler, ExecutionStep step,
+			String modelName, StreamingResponseHandler streamingResponseHandler, ExecutionStep step,
 			PlanIdDispatcher planIdDispatcher, JmanusEventPublisher jmanusEventPublisher) {
 		super(llmService, planExecutionRecorder, manusProperties, name, description, nextStepPrompt, availableToolKeys,
-				toolCallingManager, initialAgentSetting, userInputService, promptService, model,
+				toolCallingManager, initialAgentSetting, userInputService, promptService, modelName,
 				streamingResponseHandler, step, planIdDispatcher, jmanusEventPublisher);
 	}
 
