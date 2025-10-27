@@ -125,6 +125,18 @@ public class ImageOcrProcessor {
 
 			// Step 4: Format content based on target filename
 			StringBuilder formattedText = new StringBuilder();
+			if (targetFilename != null && targetFilename.endsWith(".md")) {
+				// Markdown output: add simple header and the extracted text
+				formattedText.append("# OCR Result\n\n");
+				formattedText.append("**Source File**: `").append(originalFilename).append("`\n\n");
+				formattedText.append("---\n\n");
+				formattedText.append(extractedText);
+				formattedText.append("\n");
+			}
+			else {
+				// Plain text output
+				formattedText.append(extractedText);
+			}
 
 			// Step 5: Save OCR result
 			Path outputFile = saveOcrResult(formattedText.toString(), ocrFilename, currentPlanId);

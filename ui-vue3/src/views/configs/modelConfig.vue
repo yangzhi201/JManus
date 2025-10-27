@@ -476,7 +476,7 @@ const showMessage = (msg: string, type: 'success' | 'error' | 'info') => {
     setTimeout(() => {
       error.value = ''
     }, 5000)
-  } else if (type === 'info') {
+  } else {
     // Show info message, use success style but shorter duration
     success.value = msg
     setTimeout(() => {
@@ -555,7 +555,7 @@ const showAddModelModal = () => {
 
 // Validate configuration
 const handleValidateConfig = async () => {
-  if (!selectedModel.value?.baseUrl || !selectedModel.value?.apiKey) {
+  if (!selectedModel.value?.baseUrl || !selectedModel.value.apiKey) {
     showMessage(t('config.modelConfig.pleaseEnterBaseUrlAndApiKey'), 'error')
     return
   }

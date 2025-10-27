@@ -58,3 +58,6 @@ src/.DS_Store
 
 # Python
 .venv/
+ui-vue3/.npmrc
+.cursor/rules/1.mdc
+application-database-tool.yml

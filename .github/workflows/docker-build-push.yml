@@ -13,26 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-name: 🐳 Build and Push Docker Image
+name: 🐳 Build Docker Image (Development)
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'src/**'
-      - 'ui-vue3/**'
-      - '../../deploy/Dockerfile'
-      - 'deploy/start.sh'
-      - 'pom.xml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'src/**'
-      - 'ui-vue3/**'
-      - 'deploy/**'
-      - 'pom.xml'
+      - "src/**"
+      - "ui-vue3/**"
+      - "deploy/Dockerfile"
+      - "deploy/start.sh"
+      - "pom.xml"
   workflow_dispatch:
 
 permissions:

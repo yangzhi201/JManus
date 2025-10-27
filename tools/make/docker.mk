@@ -17,7 +17,7 @@
 ##@ Docker
 
 DOCKER_REGISTRY := ghcr.io
-DOCKER_ORG := spring-ai-aliabba
+DOCKER_ORG := spring-ai-alibaba
 DOCKER_IMAGE_NAME := jmanus
 DOCKER_CONTAINER_NAME := jmanus-container
 
@@ -36,7 +36,7 @@ docker-build-run: docker-build docker-run
 .PHONY: docker-run
 docker-run: ## Run Docker container
 	@$(LOG_TARGET)
-	@docker run --name $(DOCKER_CONTAINER_NAME) -d $(DOCKER_REGISTRY)/$(DOCKER_ORG)/$(DOCKER_IMAGE_NAME):latest
+	@docker run --name $(DOCKER_CONTAINER_NAME) -p 18080:18080 -d $(DOCKER_REGISTRY)/$(DOCKER_ORG)/$(DOCKER_IMAGE_NAME):latest
 
 # Remove image
 .PHONY: docker-rmi

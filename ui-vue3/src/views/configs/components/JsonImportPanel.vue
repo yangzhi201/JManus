@@ -160,7 +160,7 @@ const validateJson = () => {
       validationErrors.value = []
     } else {
       isJsonValid.value = false
-      validationErrors.value = validationResult.errors || []
+      validationErrors.value = validationResult.errors ?? []
     }
 
     emitValidationResult()
@@ -196,7 +196,7 @@ const emitValidationResult = () => {
     errors: validationErrors.value
   }
   emit('validationChange', result)
-  props.onValidationChange?.(result)
+  props.onValidationChange(result)
 }
 
 // Validate MCP configuration structure

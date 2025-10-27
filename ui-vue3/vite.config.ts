@@ -13,16 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { fileURLToPath, URL } from 'node:url'
-import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueJsx from '@vitejs/plugin-vue-jsx'
+import { fileURLToPath, URL } from 'node:url'
+import { defineConfig } from 'vite'
 import checker from 'vite-plugin-checker'
 
 export default defineConfig({
   base: '/ui',
   build: {
     outDir: './ui',
+    sourcemap: true, // Enable source maps for production builds
+  },
+  css: {
+    devSourcemap: true, // Enable CSS source maps in development
   },
   server: {
     open: true, // Automatically open browser on startup
@@ -39,18 +43,18 @@ export default defineConfig({
     },
   },
   plugins: [
-    vue(), 
+    vue(),
     vueJsx(),
     checker({
       // Enable TypeScript checking in development
       typescript: true,
       // Temporarily disable Vue template type checking due to @volar/typescript compatibility issue
       // vueTsc: true,
-      // Enable ESLint checking
+      // Temporarily disable ESLint checking during debugging to avoid conflicts
       eslint: {
-        lintCommand: 'eslint "./src/**/*.{ts,tsx,vue}"'
-      }
-    })
+        lintCommand: 'eslint "./src/**/*.{ts,tsx,vue}"',
+      },
+    }),
   ],
   resolve: {
     alias: {

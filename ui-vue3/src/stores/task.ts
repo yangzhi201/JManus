@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
-import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import { ref } from 'vue'
 
 export interface TaskPayload {
   prompt: string
   timestamp: number
   processed?: boolean
+  planId?: string
+  isRunning?: boolean
 }
 
 export const useTaskStore = defineStore('task', () => {
@@ -31,10 +33,17 @@ export const useTaskStore = defineStore('task', () => {
   // Set new task
   const setTask = (prompt: string) => {
     console.log('[TaskStore] setTask called with prompt:', prompt)
+
+    // Don't create tasks with empty prompts
+    if (!prompt.trim()) {
+      console.warn('[TaskStore] Empty prompt provided, not creating task')
+      return
+    }
+
     const newTask = {
       prompt,
       timestamp: Date.now(),
-      processed: false
+      processed: false,
     }
     currentTask.value = newTask
     console.log('[TaskStore] Task set, currentTask.value:', currentTask.value)
@@ -74,7 +83,12 @@ export const useTaskStore = defineStore('task', () => {
   // Check if there are unprocessed tasks
   const hasUnprocessedTask = () => {
     const result = currentTask.value && !currentTask.value.processed
-    console.log('[TaskStore] hasUnprocessedTask check - currentTask:', currentTask.value, 'result:', result)
+    console.log(
+      '[TaskStore] hasUnprocessedTask check - currentTask:',
+      currentTask.value,
+      'result:',
+      result
+    )
     return result
   }
 
@@ -99,11 +113,63 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   // Emit plan execution requested event
-  const emitPlanExecutionRequested = (payload: { title: string; planData: any; params?: string }) => {
+  const emitPlanExecutionRequested = (payload: {
+    title: string
+    planData: any
+    params?: string
+  }) => {
     console.log('[TaskStore] emitPlanExecutionRequested called with payload:', payload)
 
     // User is on direct page, send event directly
     window.dispatchEvent(new CustomEvent('plan-execution-requested', { detail: payload }))
+  }
+
+  // Set task as running with plan ID
+  const setTaskRunning = (planId: string) => {
+    console.log('[TaskStore] setTaskRunning called with planId:', planId)
+    // Create a task if none exists, or update existing one
+    if (!currentTask.value) {
+      // Create a new task for running state
+      currentTask.value = {
+        prompt: '', // Empty prompt since this is just for tracking running state
+        timestamp: Date.now(),
+        processed: false,
+        planId: planId,
+        isRunning: true,
+      }
+      console.log('[TaskStore] Created new task for running state:', currentTask.value)
+    } else {
+      currentTask.value.planId = planId
+      currentTask.value.isRunning = true
+      console.log('[TaskStore] Updated existing task:', currentTask.value)
+    }
+  }
+
+  // Stop current running task
+  const stopCurrentTask = async () => {
+    console.log('[TaskStore] stopCurrentTask called')
+    if (currentTask.value && currentTask.value.isRunning && currentTask.value.planId) {
+      try {
+        const { DirectApiService } = await import('@/api/direct-api-service')
+        await DirectApiService.stopTask(currentTask.value.planId)
+        console.log('[TaskStore] Task stopped successfully')
+
+        // Mark task as no longer running
+        currentTask.value.isRunning = false
+        return true
+      } catch (error) {
+        console.error('[TaskStore] Failed to stop task:', error)
+        return false
+      }
+    }
+    return false
+  }
+
+  // Check if there's a running task
+  const hasRunningTask = () => {
+    const result = currentTask.value && currentTask.value.isRunning
+    console.log('[TaskStore] hasRunningTask check - result:', result)
+    return result
   }
 
   return {
@@ -119,6 +185,9 @@ export const useTaskStore = defineStore('task', () => {
     markHomeVisited,
     checkHomeVisited,
     resetHomeVisited,
-    emitPlanExecutionRequested
+    emitPlanExecutionRequested,
+    setTaskRunning,
+    stopCurrentTask,
+    hasRunningTask,
   }
 })
