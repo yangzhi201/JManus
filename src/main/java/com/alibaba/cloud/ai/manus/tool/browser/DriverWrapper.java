@@ -229,33 +229,80 @@ public class DriverWrapper {
 	}
 
 	public void close() {
-		saveCookies();
+		log.info("Closing DriverWrapper and all associated resources");
+
+		// Save cookies first, before closing anything
+		try {
+			saveCookies();
+		}
+		catch (Exception e) {
+			log.warn("Failed to save cookies during close: {}", e.getMessage());
+		}
+
+		// Close current page first
 		if (this.currentPage != null) {
 			try {
-				this.currentPage.close();
+				if (!this.currentPage.isClosed()) {
+					this.currentPage.close();
+					log.debug("Successfully closed current page");
+				}
+				else {
+					log.debug("Current page was already closed");
+				}
 			}
 			catch (Exception e) {
-				log.info("Error closing current page: {}", e.getMessage());
+				log.warn("Error closing current page: {}", e.getMessage());
+			}
+			finally {
+				this.currentPage = null;
 			}
 		}
+
+		// Close browser context (if using browser.newContext())
+		// Get context from page if available, or close all contexts from browser
 		if (this.browser != null) {
 			try {
-				this.browser.close();
+				// If we have a page, try to get its context and close it
+				// Otherwise, close all contexts from the browser
+				if (this.currentPage != null && !this.currentPage.isClosed()) {
+					try {
+						com.microsoft.playwright.BrowserContext context = this.currentPage.context();
+						if (context != null) {
+							context.close();
+							log.debug("Successfully closed browser context");
+						}
+					}
+					catch (Exception e) {
+						log.warn("Error closing browser context from page: {}", e.getMessage());
+					}
+				}
+
+				// Close browser if still connected
+				if (this.browser.isConnected()) {
+					this.browser.close();
+					log.debug("Successfully closed browser");
+				}
+				else {
+					log.debug("Browser was already disconnected");
+				}
 			}
 			catch (Exception e) {
-				log.info("Error closing browser: {}", e.getMessage());
+				log.warn("Error closing browser: {}", e.getMessage());
+			}
+			finally {
+				this.browser = null;
 			}
 		}
-		// Playwright instance itself is usually managed by the service that created it.
+
+		// Clean up ARIA element holder
+		this.ariaElementHolder = null;
+
+		log.info("DriverWrapper close operation completed");
+
+		// Note: Playwright instance itself is usually managed by the service that created
+		// it.
 		// Closing it here might be premature if other DriverWrappers use the same
-		// Playwright instance.
-		// if (this.playwright != null) {
-		// try {
-		// this.playwright.close();
-		// } catch (Exception e) {
-		// log.info("Error closing playwright: {}", e.getMessage());
-		// }
-		// }
+		// Playwright instance, so we leave it to the service to manage.
 	}
 
 }
