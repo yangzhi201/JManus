@@ -367,8 +367,8 @@ public class DynamicAgent extends ReActAgent {
 	 * Calculate exponential backoff delay
 	 */
 	private long calculateBackoffDelay(int attempt) {
-		// Exponential backoff: 2^attempt * 1000ms, max 30 seconds
-		long delay = Math.min(1000L * (1L << (attempt - 1)), 30000L);
+		// Exponential backoff: 2^attempt * 2000ms, max 60 seconds
+		long delay = Math.min(2000L * (1L << (attempt - 1)), 60000L);
 		return delay;
 	}
 
@@ -590,7 +590,7 @@ public class DynamicAgent extends ReActAgent {
 		catch (Exception e) {
 			log.error("Error executing single tool: {}", e.getMessage(), e);
 			processMemory(toolExecutionResult); // Process memory even on error
-			// Wrap exception with SystemErrorReportTool
+			// For other errors, wrap exception with SystemErrorReportTool
 			List<AgentExecResult> emptyResults = new ArrayList<>();
 			return handleExceptionWithSystemErrorReport(e, emptyResults);
 		}
@@ -700,7 +700,7 @@ public class DynamicAgent extends ReActAgent {
 		}
 		catch (Exception e) {
 			log.error("Error executing multiple tools: {}", e.getMessage(), e);
-			return new AgentExecResult("Error executing tools: " + e.getMessage(), AgentState.COMPLETED);
+			return new AgentExecResult("Error executing tools: " + e.getMessage(), AgentState.IN_PROGRESS);
 		}
 	}
 
@@ -959,13 +959,13 @@ public class DynamicAgent extends ReActAgent {
 			recordErrorToolThinkingAndAction(param, "LLM timeout after 3 retries",
 					"SystemErrorReportTool called to report LLM timeout error", finalErrorMessage);
 
-			return new AgentExecResult(result, AgentState.COMPLETED);
+			return new AgentExecResult(result, AgentState.FAILED);
 		}
 		catch (Exception e) {
 			log.error("Failed to handle LLM timeout with SystemErrorReportTool", e);
 			String fallbackError = "LLM timeout error: " + buildErrorMessageFromLatestException();
 			step.setErrorMessage(fallbackError);
-			return new AgentExecResult(fallbackError, AgentState.COMPLETED);
+			return new AgentExecResult(fallbackError, AgentState.FAILED);
 		}
 	}
 
