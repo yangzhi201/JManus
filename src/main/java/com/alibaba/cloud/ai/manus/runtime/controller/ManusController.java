@@ -363,6 +363,9 @@ public class ManusController implements JmanusListener<PlanExceptionEvent> {
 	 */
 	@GetMapping("/details/{planId}")
 	public synchronized ResponseEntity<?> getExecutionDetails(@PathVariable("planId") String planId) {
+		if (planId == null || planId.trim().isEmpty()) {
+			return ResponseEntity.badRequest().body("Plan ID cannot be null or empty");
+		}
 		Throwable throwable = this.exceptionCache.getIfPresent(planId);
 		if (throwable != null) {
 			logger.error("Exception found in exception cache for planId: {}", planId, throwable);
@@ -778,13 +781,20 @@ public class ManusController implements JmanusListener<PlanExceptionEvent> {
 
 	@Override
 	public void onEvent(PlanExceptionEvent event) {
-		this.exceptionCache.put(event.getPlanId(), event.getThrowable());
+		String planId = event.getPlanId();
+		Throwable throwable = event.getThrowable();
+		if (planId != null && throwable != null) {
+			this.exceptionCache.put(planId, throwable);
+		}
 	}
 
 	@EventListener
 	public void onPlanExceptionCleared(PlanExceptionClearedEvent event) {
-		logger.info("Clearing exception cache for planId: {}", event.getPlanId());
-		this.exceptionCache.invalidate(event.getPlanId());
+		String planId = event.getPlanId();
+		if (planId != null) {
+			logger.info("Clearing exception cache for planId: {}", planId);
+			this.exceptionCache.invalidate(planId);
+		}
 	}
 
 	/**

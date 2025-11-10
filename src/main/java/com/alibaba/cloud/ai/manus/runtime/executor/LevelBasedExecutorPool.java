@@ -71,7 +71,7 @@ public class LevelBasedExecutorPool {
 			depthLevel = 0;
 		}
 
-		return levelPools.computeIfAbsent(depthLevel, this::createLevelPool);
+		return levelPools.computeIfAbsent(depthLevel, level -> createLevelPool(level));
 	}
 
 	/**
