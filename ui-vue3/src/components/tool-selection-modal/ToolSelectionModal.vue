@@ -43,21 +43,19 @@
       <!-- Tool Statistics -->
       <div class="tool-summary">
         <span class="summary-text">
-          {{ $t('toolSelection.summary', {
-            groups: groupedTools.size,
-            tools: totalTools,
-            selected: selectedTools.length
-          }) }}
+          {{
+            $t('toolSelection.summary', {
+              groups: groupedTools.size,
+              tools: totalTools,
+              selected: selectedTools.length,
+            })
+          }}
         </span>
       </div>
 
       <!-- Tool Group List -->
       <div class="tool-groups" v-if="groupedTools.size > 0">
-        <div
-          v-for="[groupName, tools] in groupedTools"
-          :key="groupName"
-          class="tool-group"
-        >
+        <div v-for="[groupName, tools] in groupedTools" :key="groupName" class="tool-group">
           <!-- Group Header -->
           <div
             class="tool-group-header"
@@ -66,7 +64,9 @@
           >
             <div class="group-title-area">
               <Icon
-                :icon="collapsedGroups.has(groupName) ? 'carbon:chevron-right' : 'carbon:chevron-down'"
+                :icon="
+                  collapsedGroups.has(groupName) ? 'carbon:chevron-right' : 'carbon:chevron-down'
+                "
                 class="collapse-icon"
               />
               <Icon icon="carbon:folder" class="group-icon" />
@@ -90,15 +90,8 @@
           </div>
 
           <!-- Group Content -->
-          <div
-            class="tool-group-content"
-            :class="{ collapsed: collapsedGroups.has(groupName) }"
-          >
-            <div
-              v-for="tool in tools"
-              :key="tool.key"
-              class="tool-selection-item"
-            >
+          <div class="tool-group-content" :class="{ collapsed: collapsedGroups.has(groupName) }">
+            <div v-for="tool in tools" :key="tool.key" class="tool-selection-item">
               <div class="tool-info">
                 <div class="tool-selection-name">{{ tool.name }}</div>
                 <div v-if="tool.description" class="tool-selection-desc">
@@ -131,10 +124,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import type { Tool } from '@/types/tool'
 import { Icon } from '@iconify/vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import Modal from '../modal/index.vue'
-import type { Tool } from '@/api/agent-api-service'
 
 interface Props {
   modelValue: boolean
@@ -153,17 +146,21 @@ const emit = defineEmits<Emits>()
 // Reactive state
 const visible = computed({
   get: () => props.modelValue,
-  set: (value) => emit('update:modelValue', value)
+  set: value => emit('update:modelValue', value),
 })
 
 const searchQuery = ref('')
 const sortBy = ref<'group' | 'name' | 'enabled'>('group')
 const collapsedGroups = ref(new Set<string>())
 const selectedTools = ref<string[]>([])
+// Store the collapsed state before search to restore when search is cleared
+const collapsedGroupsBeforeSearch = ref<Set<string> | null>(null)
 
 // Set group checkbox indeterminate state
 const updateGroupCheckboxState = (groupName: string, tools: Tool[]) => {
-  const checkbox = document.querySelector(`input[data-group="${groupName}"]`) as HTMLInputElement | null
+  const checkbox = document.querySelector(
+    `input[data-group="${groupName}"]`
+  ) as HTMLInputElement | null
   if (checkbox) {
     checkbox.indeterminate = isGroupPartiallySelected(tools)
   }
@@ -172,7 +169,7 @@ const updateGroupCheckboxState = (groupName: string, tools: Tool[]) => {
 // Initialize the selected tools
 watch(
   () => props.selectedToolIds,
-  (newIds) => {
+  newIds => {
     selectedTools.value = [...newIds]
   },
   { immediate: true }
@@ -181,7 +178,7 @@ watch(
 // Filtered and sorted tools
 const filteredTools = computed(() => {
   let filtered = props.tools.filter(tool => tool.key) // Filter out invalid tools
-  
+
   // Filter out non-selectable tools
   filtered = filtered.filter(tool => tool.selectable === true)
 
@@ -226,7 +223,23 @@ const filteredTools = computed(() => {
   return filtered
 })
 
-// Tools grouped by service group
+// All tools grouped by service group (for checking which groups have matches)
+const allGroupedTools = computed(() => {
+  const groups = new Map<string, Tool[]>()
+  const allTools = props.tools.filter(tool => tool.key && tool.selectable === true)
+
+  allTools.forEach(tool => {
+    const groupName = tool.serviceGroup || 'Ungrouped'
+    if (!groups.has(groupName)) {
+      groups.set(groupName, [])
+    }
+    groups.get(groupName)!.push(tool)
+  })
+
+  return groups
+})
+
+// Tools grouped by service group (filtered)
 const groupedTools = computed(() => {
   const groups = new Map<string, Tool[]>()
 
@@ -336,15 +349,49 @@ const handleConfirm = () => {
 }
 
 const handleCancel = () => {
-// Translate to English and follow frontend terminology
+  // Translate to English and follow frontend terminology
   selectedTools.value = [...props.selectedToolIds]
   emit('update:modelValue', false)
 }
 
+// Auto-expand groups that contain matching tools when searching
+watch(searchQuery, newQuery => {
+  const query = newQuery.trim().toLowerCase()
+  
+  if (query) {
+    // Save current collapsed state before search if not already saved
+    if (collapsedGroupsBeforeSearch.value === null) {
+      collapsedGroupsBeforeSearch.value = new Set(collapsedGroups.value)
+    }
+    
+    // Expand all groups that contain matching tools (check all original tools, not just filtered)
+    for (const [groupName, tools] of allGroupedTools.value) {
+      const hasMatchingTool = tools.some(
+        tool =>
+          tool.name.toLowerCase().includes(query) ||
+          (tool.description && tool.description.toLowerCase().includes(query)) ||
+          (tool.serviceGroup && tool.serviceGroup.toLowerCase().includes(query))
+      )
+      
+      if (hasMatchingTool) {
+        // Expand the group if it contains matching tools
+        collapsedGroups.value.delete(groupName)
+      }
+    }
+  } else {
+    // Restore previous collapsed state when search is cleared
+    if (collapsedGroupsBeforeSearch.value !== null) {
+      collapsedGroups.value = new Set(collapsedGroupsBeforeSearch.value)
+      collapsedGroupsBeforeSearch.value = null
+    }
+  }
+})
+
 // When the modal opens, expand the first group by default and collapse the others
-watch(visible, (newVisible) => {
+watch(visible, newVisible => {
   if (newVisible) {
     collapsedGroups.value.clear()
+    collapsedGroupsBeforeSearch.value = null
     const groupNames = Array.from(groupedTools.value.keys())
     if (groupNames.length > 1) {
       // Collapse all groups except the first one by default
@@ -423,7 +470,6 @@ watch(visible, (newVisible) => {
   color: rgba(255, 255, 255, 0.7);
   font-size: 13px;
 }
-
 
 .tool-group {
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -570,7 +616,7 @@ watch(visible, (newVisible) => {
 
 .tool-enable-slider:before {
   position: absolute;
-  content: "";
+  content: '';
   height: 18px;
   width: 18px;
   left: 3px;

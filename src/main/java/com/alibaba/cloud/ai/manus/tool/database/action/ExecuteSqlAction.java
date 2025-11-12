@@ -17,17 +17,19 @@
 package com.alibaba.cloud.ai.manus.tool.database.action;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.alibaba.cloud.ai.manus.tool.database.DatabaseRequest;
-import com.alibaba.cloud.ai.manus.tool.database.DataSourceService;
-import com.alibaba.cloud.ai.manus.tool.code.ToolExecuteResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.alibaba.cloud.ai.manus.tool.code.ToolExecuteResult;
+import com.alibaba.cloud.ai.manus.tool.database.DataSourceService;
+import com.alibaba.cloud.ai.manus.tool.database.DatabaseRequest;
 
 public class ExecuteSqlAction extends AbstractDatabaseAction {
 
@@ -37,12 +39,86 @@ public class ExecuteSqlAction extends AbstractDatabaseAction {
 	public ToolExecuteResult execute(DatabaseRequest request, DataSourceService dataSourceService) {
 		String query = request.getQuery();
 		String datasourceName = request.getDatasourceName();
+		List<Object> parameters = request.getParameters();
 
 		if (query == null || query.trim().isEmpty()) {
 			log.warn("ExecuteSqlAction failed: missing query statement, datasourceName={}", datasourceName);
 			return new ToolExecuteResult("Datasource: " + (datasourceName != null ? datasourceName : "default")
 					+ "\nError: Missing query statement");
 		}
+
+		// Check if we should use prepared statements (parameters provided)
+		if (parameters != null && !parameters.isEmpty()) {
+			return executePreparedStatement(query, parameters, datasourceName, dataSourceService);
+		}
+		else {
+			return executeRegularStatement(query, datasourceName, dataSourceService);
+		}
+	}
+
+	/**
+	 * Execute SQL using prepared statements with parameters
+	 */
+	private ToolExecuteResult executePreparedStatement(String query, List<Object> parameters, String datasourceName,
+			DataSourceService dataSourceService) {
+		// Validate parameter count matches placeholder count
+		int placeholderCount = countPlaceholders(query);
+		if (placeholderCount != parameters.size()) {
+			String errorMsg = String
+				.format("Parameter count mismatch: SQL query has %d placeholder(s) (?), but %d parameter(s) provided. "
+						+ "Query: %s", placeholderCount, parameters.size(), query);
+			log.error("ExecuteSqlAction parameter validation failed: {}", errorMsg);
+			return new ToolExecuteResult(
+					"Datasource: " + (datasourceName != null ? datasourceName : "default") + "\nError: " + errorMsg);
+		}
+
+		List<String> results = new ArrayList<>();
+		try (Connection conn = datasourceName != null && !datasourceName.trim().isEmpty()
+				? dataSourceService.getConnection(datasourceName) : dataSourceService.getConnection();
+				PreparedStatement pstmt = conn.prepareStatement(query)) {
+
+			// Set parameters
+			for (int i = 0; i < parameters.size(); i++) {
+				Object param = parameters.get(i);
+				if (param == null) {
+					pstmt.setNull(i + 1, java.sql.Types.NULL);
+				}
+				else {
+					pstmt.setObject(i + 1, param);
+				}
+			}
+
+			log.info("Executing prepared statement with {} parameters", parameters.size());
+			boolean hasResultSet = pstmt.execute();
+
+			if (hasResultSet) {
+				try (ResultSet rs = pstmt.getResultSet()) {
+					results.add(formatResultSet(rs));
+				}
+			}
+			else {
+				int updateCount = pstmt.getUpdateCount();
+				results.add("Execution successful. Affected rows: " + updateCount);
+			}
+
+			log.info("ExecuteSqlAction (prepared) completed successfully, datasourceName={}", datasourceName);
+			String resultContent = "Datasource: " + (datasourceName != null ? datasourceName : "default") + "\n"
+					+ String.join("\n---\n", results);
+			return new ToolExecuteResult(resultContent);
+		}
+		catch (SQLException e) {
+			log.error("ExecuteSqlAction (prepared) failed with SQLException, datasourceName={}, error={}",
+					datasourceName, e.getMessage(), e);
+			return new ToolExecuteResult("Datasource: " + (datasourceName != null ? datasourceName : "default")
+					+ "\nPrepared SQL execution failed: " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Execute SQL using regular statements (backward compatibility)
+	 */
+	private ToolExecuteResult executeRegularStatement(String query, String datasourceName,
+			DataSourceService dataSourceService) {
 		String[] statements = query.split(";");
 		List<String> results = new ArrayList<>();
 		try (Connection conn = datasourceName != null && !datasourceName.trim().isEmpty()
@@ -63,41 +139,107 @@ public class ExecuteSqlAction extends AbstractDatabaseAction {
 					results.add("Execution successful. Affected rows: " + updateCount);
 				}
 			}
-			log.info("ExecuteSqlAction completed successfully, datasourceName={}, statements={}", datasourceName,
-					statements.length);
+			log.info("ExecuteSqlAction (regular) completed successfully, datasourceName={}, statements={}",
+					datasourceName, statements.length);
 			String resultContent = "Datasource: " + (datasourceName != null ? datasourceName : "default") + "\n"
 					+ String.join("\n---\n", results);
 			return new ToolExecuteResult(resultContent);
 		}
 		catch (SQLException e) {
-			log.error("ExecuteSqlAction failed with SQLException, datasourceName={}, error={}", datasourceName,
-					e.getMessage(), e);
+			log.error("ExecuteSqlAction (regular) failed with SQLException, datasourceName={}, error={}",
+					datasourceName, e.getMessage(), e);
 			return new ToolExecuteResult("Datasource: " + (datasourceName != null ? datasourceName : "default")
 					+ "\nSQL execution failed: " + e.getMessage());
 		}
 	}
 
 	private String formatResultSet(ResultSet rs) throws SQLException {
-		StringBuilder sb = new StringBuilder();
 		int columnCount = rs.getMetaData().getColumnCount();
-		// Column names
+		// Collect column names
+		List<String> columnNames = new ArrayList<>();
 		for (int i = 1; i <= columnCount; i++) {
-			sb.append(rs.getMetaData().getColumnName(i));
-			if (i < columnCount)
-				sb.append(",");
+			columnNames.add(rs.getMetaData().getColumnName(i));
 		}
-		sb.append("\n");
-		// Data
+		// Check if we have data and collect rows
+		boolean hasData = false;
+		List<List<String>> rows = new ArrayList<>();
 		while (rs.next()) {
+			hasData = true;
+			List<String> row = new ArrayList<>();
 			for (int i = 1; i <= columnCount; i++) {
 				Object val = rs.getObject(i);
-				sb.append(val == null ? "NULL" : val.toString());
-				if (i < columnCount)
-					sb.append(",");
+				String cellValue = (val == null) ? "NULL" : val.toString();
+				row.add(escapeMarkdownTableCell(cellValue));
 			}
-			sb.append("\n");
+			rows.add(row);
 		}
-		return sb.toString().trim();
+		// Format output based on whether we have data
+		if (hasData) {
+			// Build markdown table
+			StringBuilder table = new StringBuilder();
+			// Header row
+			table.append("| ");
+			for (int i = 0; i < columnNames.size(); i++) {
+				table.append(escapeMarkdownTableCell(columnNames.get(i)));
+				if (i < columnNames.size() - 1) {
+					table.append(" | ");
+				}
+			}
+			table.append(" |\n");
+			// Separator row
+			table.append("| ");
+			for (int i = 0; i < columnNames.size(); i++) {
+				table.append("---");
+				if (i < columnNames.size() - 1) {
+					table.append(" | ");
+				}
+			}
+			table.append(" |\n");
+			// Data rows
+			for (List<String> row : rows) {
+				table.append("| ");
+				for (int i = 0; i < row.size(); i++) {
+					table.append(row.get(i));
+					if (i < row.size() - 1) {
+						table.append(" | ");
+					}
+				}
+				table.append(" |\n");
+			}
+			return table.toString();
+		}
+		else {
+			// Empty result set: return specific format
+			String columnNamesStr = String.join(",", columnNames);
+			return "returnColumn: " + columnNamesStr + " \nresultSet: No rows found.";
+		}
+	}
+
+	private String escapeMarkdownTableCell(String cell) {
+		if (cell == null) {
+			return "";
+		}
+		// Replace pipe characters and newlines to prevent markdown table breakage
+		return cell.replace("|", "\\|").replace("\n", "\\n").replace("\r", "\\r");
+	}
+
+	/**
+	 * Count the number of ? placeholders in SQL query Note: This is a simple
+	 * implementation that counts all ? characters. For production use, a more
+	 * sophisticated parser would be needed to handle question marks inside string
+	 * literals, comments, etc.
+	 */
+	private int countPlaceholders(String query) {
+		if (query == null || query.trim().isEmpty()) {
+			return 0;
+		}
+		int count = 0;
+		for (int i = 0; i < query.length(); i++) {
+			if (query.charAt(i) == '?') {
+				count++;
+			}
+		}
+		return count;
 	}
 
 }

@@ -15,21 +15,33 @@
  */
 package com.alibaba.cloud.ai.manus.runtime.executor;
 
-import com.alibaba.cloud.ai.manus.agent.BaseAgent;
-import com.alibaba.cloud.ai.manus.config.ManusProperties;
-import com.alibaba.cloud.ai.manus.agent.entity.DynamicAgentEntity;
-import com.alibaba.cloud.ai.manus.agent.service.AgentService;
-import com.alibaba.cloud.ai.manus.llm.LlmService;
-import com.alibaba.cloud.ai.manus.model.repository.DynamicModelRepository;
-import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
-import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionContext;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
-import com.alibaba.cloud.ai.manus.runtime.service.FileUploadService;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.springframework.ai.model.tool.ToolCallingManager;
+
+import com.alibaba.cloud.ai.manus.agent.BaseAgent;
+import com.alibaba.cloud.ai.manus.agent.ConfigurableDynaAgent;
+import com.alibaba.cloud.ai.manus.agent.ToolCallbackProvider;
+import com.alibaba.cloud.ai.manus.agent.entity.DynamicAgentEntity;
+import com.alibaba.cloud.ai.manus.config.ManusProperties;
+import com.alibaba.cloud.ai.manus.event.JmanusEventPublisher;
+import com.alibaba.cloud.ai.manus.llm.LlmService;
+import com.alibaba.cloud.ai.manus.llm.StreamingResponseHandler;
+import com.alibaba.cloud.ai.manus.model.repository.DynamicModelRepository;
+import com.alibaba.cloud.ai.manus.planning.PlanningFactory;
+import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
+import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionContext;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
+import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
+import com.alibaba.cloud.ai.manus.runtime.service.FileUploadService;
+import com.alibaba.cloud.ai.manus.runtime.service.ParallelToolExecutionService;
+import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
+import com.alibaba.cloud.ai.manus.runtime.service.UserInputService;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Dynamic Agent Plan Executor - Specialized executor for DynamicAgentExecutionPlan with
@@ -47,12 +59,40 @@ public class DynamicToolPlanExecutor extends AbstractPlanExecutor {
 	 * @param levelBasedExecutorPool Level-based executor pool for depth-based execution
 	 * @param dynamicModelRepository Dynamic model repository
 	 */
+	private final PlanningFactory planningFactory;
+
+	private final ToolCallingManager toolCallingManager;
+
+	private final UserInputService userInputService;
+
+	private final StreamingResponseHandler streamingResponseHandler;
+
+	private final PlanIdDispatcher planIdDispatcher;
+
+	private final JmanusEventPublisher jmanusEventPublisher;
+
+	private final ObjectMapper objectMapper;
+
+	private final ParallelToolExecutionService parallelToolExecutionService;
+
 	public DynamicToolPlanExecutor(List<DynamicAgentEntity> agents, PlanExecutionRecorder recorder,
-			AgentService agentService, LlmService llmService, ManusProperties manusProperties,
-			LevelBasedExecutorPool levelBasedExecutorPool, DynamicModelRepository dynamicModelRepository,
-			FileUploadService fileUploadService, AgentInterruptionHelper agentInterruptionHelper) {
-		super(agents, recorder, agentService, llmService, manusProperties, levelBasedExecutorPool, fileUploadService,
+			LlmService llmService, ManusProperties manusProperties, LevelBasedExecutorPool levelBasedExecutorPool,
+			DynamicModelRepository dynamicModelRepository, FileUploadService fileUploadService,
+			AgentInterruptionHelper agentInterruptionHelper, PlanningFactory planningFactory,
+			ToolCallingManager toolCallingManager, UserInputService userInputService,
+			StreamingResponseHandler streamingResponseHandler, PlanIdDispatcher planIdDispatcher,
+			JmanusEventPublisher jmanusEventPublisher, ObjectMapper objectMapper,
+			ParallelToolExecutionService parallelToolExecutionService) {
+		super(agents, recorder, llmService, manusProperties, levelBasedExecutorPool, fileUploadService,
 				agentInterruptionHelper);
+		this.planningFactory = planningFactory;
+		this.toolCallingManager = toolCallingManager;
+		this.userInputService = userInputService;
+		this.streamingResponseHandler = streamingResponseHandler;
+		this.planIdDispatcher = planIdDispatcher;
+		this.jmanusEventPublisher = jmanusEventPublisher;
+		this.objectMapper = objectMapper;
+		this.parallelToolExecutionService = parallelToolExecutionService;
 	}
 
 	protected String getStepFromStepReq(String stepRequirement) {
@@ -84,14 +124,42 @@ public class DynamicToolPlanExecutor extends AbstractPlanExecutor {
 			String modelName = step.getModelName();
 			List<String> selectedToolKeys = step.getSelectedToolKeys();
 
-			BaseAgent executor = agentService.createDynamicBaseAgent("ConfigurableDynaAgent",
-					context.getPlan().getCurrentPlanId(), context.getPlan().getRootPlanId(), initSettings,
-					expectedReturnInfo, step, modelName, selectedToolKeys);
+			BaseAgent executor = createConfigurableDynaAgent(context.getPlan().getCurrentPlanId(),
+					context.getPlan().getRootPlanId(), initSettings, expectedReturnInfo, step, modelName,
+					selectedToolKeys, context.getPlanDepth());
 			return executor;
 		}
 		else {
-			return super.getExecutorForStep(context, step);
+			throw new IllegalArgumentException("No executor found for step type: " + stepType);
 		}
+	}
+
+	private BaseAgent createConfigurableDynaAgent(String planId, String rootPlanId,
+			Map<String, Object> initialAgentSetting, String expectedReturnInfo, ExecutionStep step, String modelName,
+			List<String> selectedToolKeys, int planDepth) {
+
+		String name = "ConfigurableDynaAgent";
+		String description = "A configurable dynamic agent";
+		String nextStepPrompt = "Based on the current environment information and prompt to make a next step decision";
+
+		ConfigurableDynaAgent agent = new ConfigurableDynaAgent(llmService, getRecorder(), manusProperties, name,
+				description, nextStepPrompt, selectedToolKeys, toolCallingManager, initialAgentSetting,
+				userInputService, modelName, streamingResponseHandler, step, planIdDispatcher, jmanusEventPublisher,
+				agentInterruptionHelper, objectMapper, parallelToolExecutionService);
+
+		agent.setCurrentPlanId(planId);
+		agent.setRootPlanId(rootPlanId);
+		agent.setPlanDepth(planDepth);
+
+		Map<String, ToolCallBackContext> toolCallbackMap = planningFactory.toolCallbackMap(planId, rootPlanId,
+				expectedReturnInfo);
+		agent.setToolCallbackProvider(new ToolCallbackProvider() {
+			@Override
+			public Map<String, ToolCallBackContext> getToolCallBackContext() {
+				return toolCallbackMap;
+			}
+		});
+		return agent;
 	}
 
 }

@@ -15,18 +15,16 @@
  */
 package com.alibaba.cloud.ai.manus.namespace.service;
 
-import com.alibaba.cloud.ai.manus.namespace.entity.NamespaceEntity;
-import com.alibaba.cloud.ai.manus.namespace.namespace.vo.NamespaceConfig;
-import com.alibaba.cloud.ai.manus.namespace.repository.NamespaceRepository;
-import com.alibaba.cloud.ai.manus.prompt.service.PromptInitializationService;
+import java.util.List;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.stream.Collectors;
+import com.alibaba.cloud.ai.manus.namespace.entity.NamespaceEntity;
+import com.alibaba.cloud.ai.manus.namespace.namespace.vo.NamespaceConfig;
+import com.alibaba.cloud.ai.manus.namespace.repository.NamespaceRepository;
 
 @Service
 public class NamespaceServiceImpl implements NamespaceService {
@@ -35,13 +33,9 @@ public class NamespaceServiceImpl implements NamespaceService {
 
 	private final NamespaceRepository repository;
 
-	@Autowired
 	public NamespaceServiceImpl(NamespaceRepository repository) {
 		this.repository = repository;
 	}
-
-	@Autowired
-	private PromptInitializationService promptInitializationService;
 
 	@Override
 	public List<NamespaceConfig> getAllNamespaces() {
@@ -77,17 +71,6 @@ public class NamespaceServiceImpl implements NamespaceService {
 			NamespaceEntity entity = new NamespaceEntity();
 			updateEntityFromConfig(entity, config);
 			entity = repository.save(entity);
-
-			// initialize prompts for the namespace
-			try {
-				promptInitializationService.initializePromptsForNamespace(config.getCode());
-				log.info("Successfully initialized prompts for namespace: {}", config.getCode());
-			}
-			catch (Exception e) {
-				log.error("Failed to initialize prompts for namespace: {}", config.getCode(), e);
-				// Don't throw exception, because even if prompt initialization fails,
-				// namespace creation itself is successful
-			}
 
 			log.info("Successfully created new Namespace: {}", config.getName());
 			return entity.mapToNamespaceConfig();

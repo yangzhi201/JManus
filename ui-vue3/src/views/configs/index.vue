@@ -44,7 +44,12 @@
             :class="{ active: activeCategory === item.key }"
             @click="handleNavClick(item.key)"
           >
-            <Icon :icon="item.icon" width="20" />
+            <Icon
+              :icon="item.icon"
+              width="20"
+              height="20"
+              style="display: inline-block; flex-shrink: 0"
+            />
             <span>{{ item.label }}</span>
           </div>
         </template>
@@ -66,17 +71,29 @@ import { useI18n } from 'vue-i18n'
 import BasicConfig from './basicConfig.vue'
 import ModelConfig from './modelConfig.vue'
 import McpConfig from './mcpConfig.vue'
-import DynamicPromptConfig from './dynamicPromptConfig.vue'
+import DatabaseConfig from './databaseConfig.vue'
 import LanguageSwitcher from '@/components/language-switcher/LanguageSwitcher.vue'
 import NamespaceConfig from './namespaceConfig.vue'
 import NamespaceSwitch from './components/namespaceSwitch.vue'
 
+// Define component name for Vue linting rules
+defineOptions({
+  name: 'ConfigsIndex',
+})
+
+type ConfigComponent =
+  | typeof BasicConfig
+  | typeof ModelConfig
+  | typeof McpConfig
+  | typeof DatabaseConfig
+  | typeof NamespaceConfig
+
 interface CategoryMap {
-  [key: string]: any
+  [key: string]: ConfigComponent | undefined
   basic: typeof BasicConfig
   model: typeof ModelConfig
   mcp: typeof McpConfig
-  prompt: typeof DynamicPromptConfig
+  database: typeof DatabaseConfig
   namespace: typeof NamespaceConfig
 }
 
@@ -91,7 +108,7 @@ const categoryMap: CategoryMap = {
   basic: BasicConfig,
   model: ModelConfig,
   mcp: McpConfig,
-  prompt: DynamicPromptConfig,
+  database: DatabaseConfig,
   namespace: NamespaceConfig,
 }
 
@@ -104,7 +121,7 @@ const categories = computed(() => [
   { key: 'basic', label: t('config.categories.basic'), icon: 'carbon:settings' },
   { key: 'model', label: t('config.categories.model'), icon: 'carbon:build-image' },
   { key: 'mcp', label: t('config.categories.mcp'), icon: 'carbon:tool-box' },
-  { key: 'prompt', label: t('config.categories.prompt'), icon: 'carbon:repo-artifact' },
+  { key: 'database', label: t('config.categories.database'), icon: 'carbon:database' },
   {
     key: 'namespace',
     label: t('config.categories.namespace'),
@@ -189,6 +206,19 @@ const handleNavClick = (categoryKey: string) => {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.3s;
+}
+
+.nav-item :deep(svg) {
+  color: rgba(255, 255, 255, 0.8);
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.nav-item :deep(.iconify) {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
 }
 
 .nav-item:hover {

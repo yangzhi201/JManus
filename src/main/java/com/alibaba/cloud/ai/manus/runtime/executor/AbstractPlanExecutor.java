@@ -15,25 +15,7 @@
  */
 package com.alibaba.cloud.ai.manus.runtime.executor;
 
-import com.alibaba.cloud.ai.manus.agent.AgentState;
-import com.alibaba.cloud.ai.manus.agent.BaseAgent;
-import com.alibaba.cloud.ai.manus.config.ManusProperties;
-import com.alibaba.cloud.ai.manus.agent.entity.DynamicAgentEntity;
-import com.alibaba.cloud.ai.manus.agent.service.AgentService;
-import com.alibaba.cloud.ai.manus.llm.LlmService;
-import com.alibaba.cloud.ai.manus.model.entity.DynamicModelEntity;
-import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionContext;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.PlanExecutionResult;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.PlanInterface;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.StepResult;
-import com.alibaba.cloud.ai.manus.runtime.service.FileUploadService;
-import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
-
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.regex.Matcher;
@@ -41,6 +23,20 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.alibaba.cloud.ai.manus.agent.AgentState;
+import com.alibaba.cloud.ai.manus.agent.BaseAgent;
+import com.alibaba.cloud.ai.manus.agent.entity.DynamicAgentEntity;
+import com.alibaba.cloud.ai.manus.config.ManusProperties;
+import com.alibaba.cloud.ai.manus.llm.LlmService;
+import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionContext;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.PlanExecutionResult;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.PlanInterface;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.StepResult;
+import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
+import com.alibaba.cloud.ai.manus.runtime.service.FileUploadService;
 
 /**
  * Abstract base class for plan executors. Contains common logic and basic functionality
@@ -61,8 +57,6 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 
 	protected final LevelBasedExecutorPool levelBasedExecutorPool;
 
-	protected final AgentService agentService;
-
 	protected AgentInterruptionHelper agentInterruptionHelper;
 
 	protected LlmService llmService;
@@ -82,13 +76,11 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 
 	public static final String EXECUTION_ENV_STRING_KEY = "current_step_env_data";
 
-	public AbstractPlanExecutor(List<DynamicAgentEntity> agents, PlanExecutionRecorder recorder,
-			AgentService agentService, LlmService llmService, ManusProperties manusProperties,
-			LevelBasedExecutorPool levelBasedExecutorPool, FileUploadService fileUploadService,
-			AgentInterruptionHelper agentInterruptionHelper) {
+	public AbstractPlanExecutor(List<DynamicAgentEntity> agents, PlanExecutionRecorder recorder, LlmService llmService,
+			ManusProperties manusProperties, LevelBasedExecutorPool levelBasedExecutorPool,
+			FileUploadService fileUploadService, AgentInterruptionHelper agentInterruptionHelper) {
 		this.agents = agents;
 		this.recorder = recorder;
-		this.agentService = agentService;
 		this.llmService = llmService;
 		this.manusProperties = manusProperties;
 		this.levelBasedExecutorPool = levelBasedExecutorPool;
@@ -112,18 +104,25 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 			}
 
 			step.setAgent(executor);
-			executor.setState(AgentState.IN_PROGRESS);
 
 			recorder.recordStepStart(step, context.getCurrentPlanId());
-			String stepResultStr = executor.run();
-			step.setResult(stepResultStr);
+			BaseAgent.AgentExecResult agentResult = executor.run();
+			step.setResult(agentResult.getResult());
+			step.setStatus(agentResult.getState());
 
-			// Check if agent was interrupted
-			if (executor.getState() == AgentState.FAILED && stepResultStr.contains("interrupted")) {
+			// Check if agent was interrupted, completed, or failed
+			if (agentResult.getState() == AgentState.INTERRUPTED) {
 				logger.info("Agent {} was interrupted during step execution", executor.getName());
 				// Don't return null, return the executor so interruption can be handled
-				// at plan
-				// level
+				// at plan level
+			}
+			else if (agentResult.getState() == AgentState.COMPLETED) {
+				logger.info("Agent {} completed step execution", executor.getName());
+			}
+			else if (agentResult.getState() == AgentState.FAILED) {
+				logger.error("Agent {} failed during step execution", executor.getName());
+				// Set success to false for plan level handling
+				context.setSuccess(false);
 			}
 
 			recorder.recordStepEnd(step, context.getCurrentPlanId());
@@ -179,35 +178,7 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 	/**
 	 * Get the executor for the step.
 	 */
-	protected BaseAgent getExecutorForStep(ExecutionContext context, ExecutionStep step) {
-
-		String stepType = getStepFromStepReq(step.getStepRequirement());
-		int stepIndex = step.getStepIndex();
-		String expectedReturnInfo = step.getTerminateColumns();
-
-		String planStatus = context.getPlan().getPlanExecutionStateStringFormat(true);
-		String stepText = step.getStepRequirement();
-
-		Map<String, Object> initSettings = new HashMap<>();
-		initSettings.put(PLAN_STATUS_KEY, planStatus);
-		initSettings.put(CURRENT_STEP_INDEX_KEY, String.valueOf(stepIndex));
-		initSettings.put(STEP_TEXT_KEY, stepText);
-		initSettings.put(EXTRA_PARAMS_KEY, context.getPlan().getExecutionParams());
-
-		for (DynamicAgentEntity agent : agents) {
-			if (agent.getAgentName().equalsIgnoreCase(stepType)) {
-				// Get model entity from agent - it's already loaded via @ManyToOne
-				DynamicModelEntity modelEntity = agent.getModel();
-
-				BaseAgent executor = agentService.createDynamicBaseAgent(agent.getAgentName(),
-						context.getPlan().getCurrentPlanId(), context.getPlan().getRootPlanId(), initSettings,
-						expectedReturnInfo, step, modelEntity.getModelName(), agent.getAvailableToolKeys());
-				return executor;
-			}
-		}
-		throw new IllegalArgumentException(
-				"No Agent Executor found for step type, check your agents list : " + stepType);
-	}
+	protected abstract BaseAgent getExecutorForStep(ExecutionContext context, ExecutionStep step);
 
 	protected PlanExecutionRecorder getRecorder() {
 		return recorder;
@@ -308,12 +279,27 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 								result.setErrorMessage("Plan execution interrupted by user");
 								break; // Stop executing remaining steps
 							}
+
+							// Check if this step failed
+							if (step.getStatus() == AgentState.FAILED) {
+								logger.error("Step execution failed, stopping plan execution");
+								context.setSuccess(false);
+								result.setSuccess(false);
+								if (step.getErrorMessage() != null && !step.getErrorMessage().isEmpty()) {
+									result.setErrorMessage(step.getErrorMessage());
+								}
+								else {
+									result.setErrorMessage("Agent execution failed: " + step.getResult());
+								}
+								break; // Stop executing remaining steps
+							}
 						}
 					}
 				}
 
-				// Only set success if no interruption occurred
-				if (result.getErrorMessage() == null || !result.getErrorMessage().contains("interrupted")) {
+				// Only set success if no interruption or failure occurred
+				if (result.getErrorMessage() == null || (!result.getErrorMessage().contains("interrupted")
+						&& !result.getErrorMessage().contains("failed"))) {
 					context.setSuccess(true);
 					result.setSuccess(true);
 					result.setFinalResult(context.getPlan().getResult());

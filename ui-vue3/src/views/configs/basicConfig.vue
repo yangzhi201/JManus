@@ -392,9 +392,6 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
   maxMemory: 'config.basicConfig.agentSettings.maxMemory',
   parallelToolCalls: 'config.basicConfig.agentSettings.parallelToolCalls',
 
-  // Agents
-  forceOverrideFromYaml: 'config.basicConfig.agents.forceOverrideFromYaml',
-
   // Infinite Context - TEMPORARILY COMMENTED OUT
   // 'enabled': ('config.basicConfig.infiniteContext.enabled'),
   // 'parallelThreads': ('config.basicConfig.infiniteContext.parallelThreads'),
@@ -451,6 +448,7 @@ const SUB_GROUP_DISPLAY_NAMES: Record<string, string> = {
   general: 'config.subGroupDisplayNames.general',
   filesystem: 'config.subGroupDisplayNames.filesystem',
   mcpServiceLoader: 'config.subGroupDisplayNames.mcpServiceLoader',
+  imageRecognition: 'config.subGroupDisplayNames.imageRecognition',
 }
 
 // Computed property: Whether there are changes
@@ -535,12 +533,12 @@ const handleBooleanUpdate = (item: ExtendedConfigItem, newValue: string | boolea
 }
 
 // Update configuration value
-const updateConfigValue = (item: ExtendedConfigItem, value: any, autoSave: boolean = false) => {
+const updateConfigValue = (item: ExtendedConfigItem, value: unknown, autoSave: boolean = false) => {
   let stringValue: string
 
   // Handle the value according to the input type
   if (item.inputType === 'BOOLEAN' || item.inputType === 'CHECKBOX') {
-    stringValue = handleBooleanUpdate(item, value)
+    stringValue = handleBooleanUpdate(item, value as string | boolean)
   } else {
     stringValue = String(value)
   }

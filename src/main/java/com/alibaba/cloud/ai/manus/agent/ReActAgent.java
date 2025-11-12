@@ -19,7 +19,6 @@ import java.util.Map;
 
 import com.alibaba.cloud.ai.manus.config.ManusProperties;
 import com.alibaba.cloud.ai.manus.llm.LlmService;
-import com.alibaba.cloud.ai.manus.prompt.service.PromptService;
 import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
 import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
@@ -39,10 +38,9 @@ public abstract class ReActAgent extends BaseAgent {
 	 */
 
 	public ReActAgent(LlmService llmService, PlanExecutionRecorder planExecutionRecorder,
-			ManusProperties manusProperties, Map<String, Object> initialAgentSetting, PromptService promptService,
-			ExecutionStep step, PlanIdDispatcher planIdDispatcher) {
-		super(llmService, planExecutionRecorder, manusProperties, initialAgentSetting, promptService, step,
-				planIdDispatcher);
+			ManusProperties manusProperties, Map<String, Object> initialAgentSetting, ExecutionStep step,
+			PlanIdDispatcher planIdDispatcher) {
+		super(llmService, planExecutionRecorder, manusProperties, initialAgentSetting, step, planIdDispatcher);
 	}
 
 	/**
@@ -90,8 +88,8 @@ public abstract class ReActAgent extends BaseAgent {
 			return act();
 		}
 		catch (com.alibaba.cloud.ai.manus.runtime.service.TaskInterruptionCheckerService.TaskInterruptedException e) {
-			// Agent was interrupted, return FAILED state to stop execution
-			return new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.FAILED);
+			// Agent was interrupted, return INTERRUPTED state to stop execution
+			return new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.INTERRUPTED);
 		}
 	}
 

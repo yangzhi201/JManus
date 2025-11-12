@@ -15,28 +15,29 @@
  */
 package com.alibaba.cloud.ai.manus.agent;
 
-import com.alibaba.cloud.ai.manus.config.ManusProperties;
-import com.alibaba.cloud.ai.manus.event.JmanusEventPublisher;
-import com.alibaba.cloud.ai.manus.llm.LlmService;
-import com.alibaba.cloud.ai.manus.llm.StreamingResponseHandler;
-import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
-import com.alibaba.cloud.ai.manus.prompt.service.PromptService;
-import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
-import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
-import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
-import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
-import com.alibaba.cloud.ai.manus.runtime.service.UserInputService;
-import com.alibaba.cloud.ai.manus.tool.TerminableTool;
-import com.alibaba.cloud.ai.manus.tool.TerminateTool;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import com.alibaba.cloud.ai.manus.config.ManusProperties;
+import com.alibaba.cloud.ai.manus.event.JmanusEventPublisher;
+import com.alibaba.cloud.ai.manus.llm.LlmService;
+import com.alibaba.cloud.ai.manus.llm.StreamingResponseHandler;
+import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
+import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
+import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
+import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
+import com.alibaba.cloud.ai.manus.runtime.service.ParallelToolExecutionService;
+import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
+import com.alibaba.cloud.ai.manus.runtime.service.UserInputService;
+import com.alibaba.cloud.ai.manus.tool.TerminableTool;
+import com.alibaba.cloud.ai.manus.tool.TerminateTool;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * ConfigurableDynaAgent - A flexible agent that allows passing tool lists dynamically
@@ -69,13 +70,14 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 	public ConfigurableDynaAgent(LlmService llmService, PlanExecutionRecorder planExecutionRecorder,
 			ManusProperties manusProperties, String name, String description, String nextStepPrompt,
 			List<String> availableToolKeys, ToolCallingManager toolCallingManager,
-			Map<String, Object> initialAgentSetting, UserInputService userInputService, PromptService promptService,
-			String modelName, StreamingResponseHandler streamingResponseHandler, ExecutionStep step,
-			PlanIdDispatcher planIdDispatcher, JmanusEventPublisher jmanusEventPublisher,
-			AgentInterruptionHelper agentInterruptionHelper) {
+			Map<String, Object> initialAgentSetting, UserInputService userInputService, String modelName,
+			StreamingResponseHandler streamingResponseHandler, ExecutionStep step, PlanIdDispatcher planIdDispatcher,
+			JmanusEventPublisher jmanusEventPublisher, AgentInterruptionHelper agentInterruptionHelper,
+			ObjectMapper objectMapper, ParallelToolExecutionService parallelToolExecutionService) {
 		super(llmService, planExecutionRecorder, manusProperties, name, description, nextStepPrompt, availableToolKeys,
-				toolCallingManager, initialAgentSetting, userInputService, promptService, modelName,
-				streamingResponseHandler, step, planIdDispatcher, jmanusEventPublisher, agentInterruptionHelper);
+				toolCallingManager, initialAgentSetting, userInputService, modelName, streamingResponseHandler, step,
+				planIdDispatcher, jmanusEventPublisher, agentInterruptionHelper, objectMapper,
+				parallelToolExecutionService);
 	}
 
 	/**

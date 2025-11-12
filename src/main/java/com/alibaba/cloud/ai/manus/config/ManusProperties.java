@@ -140,26 +140,6 @@ public class ManusProperties implements IManusProperties {
 		this.maxSteps = maxSteps;
 	}
 
-	@ConfigProperty(group = "manus", subGroup = "agents", key = "forceOverrideFromYaml",
-			path = "manus.agents.forceOverrideFromYaml", description = "manus.agent.forceOverrideFromYaml.description",
-			defaultValue = "true", inputType = ConfigInputType.CHECKBOX,
-			options = { @ConfigOption(value = "true", label = "manus.agent.forceOverrideFromYaml.option.true"),
-					@ConfigOption(value = "false", label = "manus.agent.forceOverrideFromYaml.option.false") })
-	private volatile Boolean forceOverrideFromYaml;
-
-	public Boolean getForceOverrideFromYaml() {
-		String configPath = "manus.agents.forceOverrideFromYaml";
-		String value = configService.getConfigValue(configPath);
-		if (value != null) {
-			forceOverrideFromYaml = Boolean.valueOf(value);
-		}
-		return forceOverrideFromYaml;
-	}
-
-	public void setForceOverrideFromYaml(Boolean forceOverrideFromYaml) {
-		this.forceOverrideFromYaml = forceOverrideFromYaml;
-	}
-
 	@ConfigProperty(group = "manus", subGroup = "agent", key = "userInputTimeout",
 			path = "manus.agent.userInputTimeout", description = "manus.agent.userInputTimeout.description",
 			defaultValue = "300", inputType = ConfigInputType.NUMBER)
@@ -227,6 +207,50 @@ public class ManusProperties implements IManusProperties {
 
 	public void setParallelToolCalls(Boolean parallelToolCalls) {
 		this.parallelToolCalls = parallelToolCalls;
+	}
+
+	@ConfigProperty(group = "manus", subGroup = "agent", key = "executorPoolSize",
+			path = "manus.agent.executorPoolSize", description = "manus.agent.executorPoolSize.description",
+			defaultValue = "5", inputType = ConfigInputType.NUMBER)
+	private volatile Integer executorPoolSize;
+
+	public Integer getExecutorPoolSize() {
+		String configPath = "manus.agent.executorPoolSize";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			executorPoolSize = Integer.valueOf(value);
+		}
+		// Ensure a default value if not configured and not set
+		if (executorPoolSize == null) {
+			executorPoolSize = 5;
+		}
+		return executorPoolSize;
+	}
+
+	public void setExecutorPoolSize(Integer executorPoolSize) {
+		this.executorPoolSize = executorPoolSize;
+	}
+
+	@ConfigProperty(group = "manus", subGroup = "agent", key = "llmReadTimeout", path = "manus.agent.llmReadTimeout",
+			description = "manus.agent.llmReadTimeout.description", defaultValue = "120",
+			inputType = ConfigInputType.NUMBER)
+	private volatile Integer llmReadTimeout;
+
+	public Integer getLlmReadTimeout() {
+		String configPath = "manus.agent.llmReadTimeout";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			llmReadTimeout = Integer.valueOf(value);
+		}
+		// Ensure a default value if not configured and not set
+		if (llmReadTimeout == null) {
+			llmReadTimeout = 120; // Default 120 seconds (2 minutes)
+		}
+		return llmReadTimeout;
+	}
+
+	public void setLlmReadTimeout(Integer llmReadTimeout) {
+		this.llmReadTimeout = llmReadTimeout;
 	}
 
 	// Agent Settings

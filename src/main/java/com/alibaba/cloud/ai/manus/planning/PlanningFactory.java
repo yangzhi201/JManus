@@ -44,7 +44,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
 import com.alibaba.cloud.ai.manus.agent.ToolCallbackProvider;
-import com.alibaba.cloud.ai.manus.agent.service.AgentService;
 import com.alibaba.cloud.ai.manus.config.ManusProperties;
 import com.alibaba.cloud.ai.manus.cron.service.CronService;
 import com.alibaba.cloud.ai.manus.llm.LlmService;
@@ -52,12 +51,11 @@ import com.alibaba.cloud.ai.manus.llm.StreamingResponseHandler;
 import com.alibaba.cloud.ai.manus.mcp.model.vo.McpServiceEntity;
 import com.alibaba.cloud.ai.manus.mcp.model.vo.McpTool;
 import com.alibaba.cloud.ai.manus.mcp.service.McpService;
-import com.alibaba.cloud.ai.manus.mcp.service.McpStateHolderService;
 import com.alibaba.cloud.ai.manus.planning.service.PlanFinalizer;
-import com.alibaba.cloud.ai.manus.prompt.service.PromptService;
 import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.manus.runtime.executor.ImageRecognitionExecutorPool;
 import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
+import com.alibaba.cloud.ai.manus.runtime.service.TaskInterruptionManager;
 import com.alibaba.cloud.ai.manus.subplan.service.SubplanToolService;
 import com.alibaba.cloud.ai.manus.tool.FormInputTool;
 import com.alibaba.cloud.ai.manus.tool.TerminateTool;
@@ -74,6 +72,7 @@ import com.alibaba.cloud.ai.manus.tool.database.DataSourceService;
 import com.alibaba.cloud.ai.manus.tool.database.DatabaseMetadataTool;
 import com.alibaba.cloud.ai.manus.tool.database.DatabaseReadTool;
 import com.alibaba.cloud.ai.manus.tool.database.DatabaseWriteTool;
+import com.alibaba.cloud.ai.manus.tool.database.UuidGenerateTool;
 import com.alibaba.cloud.ai.manus.tool.dirOperator.DirectoryOperator;
 import com.alibaba.cloud.ai.manus.tool.excelProcessor.IExcelProcessingService;
 import com.alibaba.cloud.ai.manus.tool.filesystem.UnifiedDirectoryManager;
@@ -82,7 +81,8 @@ import com.alibaba.cloud.ai.manus.tool.jsxGenerator.JsxGeneratorOperator;
 import com.alibaba.cloud.ai.manus.tool.mapreduce.ParallelExecutionTool;
 import com.alibaba.cloud.ai.manus.tool.pptGenerator.PptGeneratorOperator;
 import com.alibaba.cloud.ai.manus.tool.tableProcessor.TableProcessingService;
-import com.alibaba.cloud.ai.manus.tool.textOperator.TextFileOperator;
+import com.alibaba.cloud.ai.manus.tool.textOperator.GlobalFileOperator;
+import com.alibaba.cloud.ai.manus.tool.textOperator.LocalFileOperator;
 import com.alibaba.cloud.ai.manus.tool.textOperator.TextFileService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -108,7 +108,8 @@ public class PlanningFactory {
 
 	private final DataSourceService dataSourceService;
 
-	private final TableProcessingService tableProcessingService;
+	// private final TableProcessingService tableProcessingService; // Currently unused -
+	// commented out for future use
 
 	private final static Logger log = LoggerFactory.getLogger(PlanningFactory.class);
 
@@ -126,9 +127,6 @@ public class PlanningFactory {
 	private ToolCallingManager toolCallingManager;
 
 	@Autowired
-	private PromptService promptService;
-
-	@Autowired
 	private StreamingResponseHandler streamingResponseHandler;
 
 	@Autowired
@@ -138,9 +136,9 @@ public class PlanningFactory {
 	@Autowired
 	private SubplanToolService subplanToolService;
 
-	@SuppressWarnings("unused")
 	@Autowired
-	private AgentService agentService;
+	@Lazy
+	private TaskInterruptionManager taskInterruptionManager;
 
 	@SuppressWarnings("unused")
 	@Autowired
@@ -173,7 +171,7 @@ public class PlanningFactory {
 		this.innerStorageService = innerStorageService;
 		this.unifiedDirectoryManager = unifiedDirectoryManager;
 		this.dataSourceService = dataSourceService;
-		this.tableProcessingService = tableProcessingService;
+		// this.tableProcessingService = tableProcessingService; // Currently unused
 	}
 
 	/**
@@ -181,7 +179,8 @@ public class PlanningFactory {
 	 * @return configured PlanFinalizer instance
 	 */
 	public PlanFinalizer createPlanFinalizer() {
-		return new PlanFinalizer(llmService, recorder, promptService, manusProperties, streamingResponseHandler);
+		return new PlanFinalizer(llmService, recorder, manusProperties, streamingResponseHandler,
+				taskInterruptionManager);
 	}
 
 	public static class ToolCallBackContext {
@@ -225,10 +224,13 @@ public class PlanningFactory {
 			toolDefinitions.add(DatabaseReadTool.getInstance(dataSourceService, objectMapper));
 			toolDefinitions.add(DatabaseWriteTool.getInstance(dataSourceService, objectMapper));
 			toolDefinitions.add(DatabaseMetadataTool.getInstance(dataSourceService, objectMapper));
-			toolDefinitions.add(new TerminateTool(planId, expectedReturnInfo));
+			toolDefinitions.add(UuidGenerateTool.getInstance(objectMapper));
+			toolDefinitions.add(new TerminateTool(planId, expectedReturnInfo, objectMapper));
 			toolDefinitions.add(new Bash(unifiedDirectoryManager, objectMapper));
 			// toolDefinitions.add(new DocLoaderTool());
-			toolDefinitions.add(new TextFileOperator(textFileService, innerStorageService, objectMapper));
+
+			toolDefinitions.add(new LocalFileOperator(textFileService, innerStorageService, objectMapper));
+			toolDefinitions.add(new GlobalFileOperator(textFileService, innerStorageService, objectMapper));
 			toolDefinitions.add(new DirectoryOperator(unifiedDirectoryManager, objectMapper));
 			// toolDefinitions.add(new UploadedFileLoaderTool(unifiedDirectoryManager,
 			// applicationContext));
@@ -252,7 +254,7 @@ public class PlanningFactory {
 			// toolDefinitions.add(new ExcelProcessorTool(excelProcessingService));
 		}
 		else {
-			toolDefinitions.add(new TerminateTool(planId, expectedReturnInfo));
+			toolDefinitions.add(new TerminateTool(planId, expectedReturnInfo, objectMapper));
 		}
 
 		List<McpServiceEntity> functionCallbacks = mcpService.getFunctionCallbacks(planId);
@@ -261,8 +263,7 @@ public class PlanningFactory {
 			ToolCallback[] tCallbacks = toolCallback.getAsyncMcpToolCallbackProvider().getToolCallbacks();
 			for (ToolCallback tCallback : tCallbacks) {
 				// The serviceGroup is the name of the tool
-				toolDefinitions.add(new McpTool(tCallback, serviceGroup, planId, new McpStateHolderService(),
-						innerStorageService, objectMapper));
+				toolDefinitions.add(new McpTool(tCallback, serviceGroup, planId, innerStorageService, objectMapper));
 			}
 		}
 		// Create FunctionToolCallback for each tool
