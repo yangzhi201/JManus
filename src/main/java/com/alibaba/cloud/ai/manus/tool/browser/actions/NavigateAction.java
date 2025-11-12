@@ -15,12 +15,11 @@
  */
 package com.alibaba.cloud.ai.manus.tool.browser.actions;
 
+import com.alibaba.cloud.ai.manus.tool.browser.BrowserUseTool;
+import com.alibaba.cloud.ai.manus.tool.code.ToolExecuteResult;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Page.WaitForLoadStateOptions;
 import com.microsoft.playwright.options.LoadState;
-
-import com.alibaba.cloud.ai.manus.tool.browser.BrowserUseTool;
-import com.alibaba.cloud.ai.manus.tool.code.ToolExecuteResult;
 
 public class NavigateAction extends BrowserAction {
 
@@ -30,6 +29,7 @@ public class NavigateAction extends BrowserAction {
 
 	@Override
 	public ToolExecuteResult execute(BrowserRequestVO request) throws Exception {
+
 		String url = request.getUrl();
 		Integer timeoutMs = getBrowserTimeoutMs();
 
@@ -45,6 +45,16 @@ public class NavigateAction extends BrowserAction {
 
 		// Before calling page.content(), ensure the page is fully loaded
 		page.waitForLoadState(LoadState.DOMCONTENTLOADED, new WaitForLoadStateOptions().setTimeout(timeoutMs));
+
+		// Save cookies after navigation to persist them
+		try {
+			getBrowserUseTool().getDriver().persistCookies();
+		}
+		catch (Exception e) {
+			// Log but don't fail the navigation if cookie saving fails
+			org.slf4j.LoggerFactory.getLogger(NavigateAction.class)
+				.debug("Failed to save cookies after navigation: {}", e.getMessage());
+		}
 
 		return new ToolExecuteResult("successfully navigated to " + url);
 	}

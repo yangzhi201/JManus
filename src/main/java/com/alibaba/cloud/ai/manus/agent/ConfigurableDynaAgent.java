@@ -32,10 +32,12 @@ import com.alibaba.cloud.ai.manus.planning.PlanningFactory.ToolCallBackContext;
 import com.alibaba.cloud.ai.manus.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.manus.runtime.entity.vo.ExecutionStep;
 import com.alibaba.cloud.ai.manus.runtime.service.AgentInterruptionHelper;
+import com.alibaba.cloud.ai.manus.runtime.service.ParallelToolExecutionService;
 import com.alibaba.cloud.ai.manus.runtime.service.PlanIdDispatcher;
 import com.alibaba.cloud.ai.manus.runtime.service.UserInputService;
 import com.alibaba.cloud.ai.manus.tool.TerminableTool;
 import com.alibaba.cloud.ai.manus.tool.TerminateTool;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * ConfigurableDynaAgent - A flexible agent that allows passing tool lists dynamically
@@ -70,10 +72,12 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 			List<String> availableToolKeys, ToolCallingManager toolCallingManager,
 			Map<String, Object> initialAgentSetting, UserInputService userInputService, String modelName,
 			StreamingResponseHandler streamingResponseHandler, ExecutionStep step, PlanIdDispatcher planIdDispatcher,
-			JmanusEventPublisher jmanusEventPublisher, AgentInterruptionHelper agentInterruptionHelper) {
+			JmanusEventPublisher jmanusEventPublisher, AgentInterruptionHelper agentInterruptionHelper,
+			ObjectMapper objectMapper, ParallelToolExecutionService parallelToolExecutionService) {
 		super(llmService, planExecutionRecorder, manusProperties, name, description, nextStepPrompt, availableToolKeys,
 				toolCallingManager, initialAgentSetting, userInputService, modelName, streamingResponseHandler, step,
-				planIdDispatcher, jmanusEventPublisher, agentInterruptionHelper);
+				planIdDispatcher, jmanusEventPublisher, agentInterruptionHelper, objectMapper,
+				parallelToolExecutionService);
 	}
 
 	/**

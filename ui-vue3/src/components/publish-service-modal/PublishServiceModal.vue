@@ -192,7 +192,6 @@
 </template>
 
 <script setup lang="ts">
-import { ToolApiService } from '@/api/tool-api-service'
 import {
   CoordinatorToolApiService,
   type CoordinatorToolVO,
@@ -201,6 +200,7 @@ import {
   PlanParameterApiService,
   type ParameterRequirements,
 } from '@/api/plan-parameter-api-service'
+import { ToolApiService } from '@/api/tool-api-service'
 import Modal from '@/components/modal/index.vue'
 import { Icon } from '@iconify/vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -474,12 +474,23 @@ const handlePublish = async () => {
 
   publishing.value = true
   try {
-    // 1. If no current tool data, get or create first
+    // 1. If no current tool data, get or create default first
     if (!currentTool.value) {
-      console.log('[PublishModal] No current tool data, getting or creating first')
-      currentTool.value = await CoordinatorToolApiService.getOrNewCoordinatorToolsByTemplate(
+      console.log('[PublishModal] No current tool data, getting existing tool or creating default')
+      const existingTool = await CoordinatorToolApiService.getCoordinatorToolByTemplate(
         props.planTemplateId
       )
+
+      if (existingTool) {
+        currentTool.value = existingTool
+      } else {
+        // Create default tool VO (not saved yet)
+        currentTool.value = CoordinatorToolApiService.createDefaultCoordinatorTool(
+          props.planTemplateId,
+          undefined,
+          props.planDescription
+        )
+      }
     }
 
     // 2. Update tool information
@@ -547,9 +558,10 @@ const handlePublish = async () => {
       showMessage(t('mcpService.saveSuccess'), 'success')
       emit('published', currentTool.value)
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[PublishModal] Failed to publish service:', err)
-    showMessage(t('mcpService.publishFailed') + ': ' + err.message, 'error')
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    showMessage(t('mcpService.publishFailed') + ': ' + message, 'error')
   } finally {
     publishing.value = false
   }
@@ -591,9 +603,10 @@ const handleDelete = async () => {
     } else {
       throw new Error(result.message)
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[PublishModal] Failed to delete MCP service:', error)
-    showMessage(t('mcpService.deleteFailed') + ': ' + error.message, 'error')
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    showMessage(t('mcpService.deleteFailed') + ': ' + message, 'error')
   } finally {
     deleting.value = false
   }
@@ -620,10 +633,26 @@ const loadCoordinatorToolData = async () => {
       '[PublishModal] Starting to load coordinator tool data, planTemplateId:',
       props.planTemplateId
     )
-    const tool = await CoordinatorToolApiService.getOrNewCoordinatorToolsByTemplate(
+
+    // Try to get existing tool
+    const existingTool = await CoordinatorToolApiService.getCoordinatorToolByTemplate(
       props.planTemplateId
     )
-    console.log('[PublishModal] Get coordinator tool data result:', tool)
+
+    let tool: CoordinatorToolVO
+    if (existingTool) {
+      // Use existing tool
+      tool = existingTool
+      console.log('[PublishModal] Found existing coordinator tool:', tool)
+    } else {
+      // Create default tool VO (not saved to database)
+      tool = CoordinatorToolApiService.createDefaultCoordinatorTool(
+        props.planTemplateId,
+        undefined,
+        props.planDescription
+      )
+      console.log('[PublishModal] Created default coordinator tool VO:', tool)
+    }
 
     // Save current tool data
     currentTool.value = tool
@@ -679,9 +708,10 @@ const loadCoordinatorToolData = async () => {
     }
 
     console.log('[PublishModal] Form data filled:', formData)
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[PublishModal] ' + t('mcpService.loadToolDataFailed') + ':', err)
-    showMessage(t('mcpService.loadToolDataFailed') + ': ' + err.message, 'error')
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    showMessage(t('mcpService.loadToolDataFailed') + ': ' + message, 'error')
   }
 }
 
