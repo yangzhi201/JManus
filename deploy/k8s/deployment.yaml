@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jmanus
+  namespace: default
+  labels:
+    app: jmanus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jmanus
+  template:
+    metadata:
+      labels:
+        app: jmanus
+    spec:
+      containers:
+        - name: jmanus
+          image: ghcr.io/spring-ai-alibaba/jmanus:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 18080
+          env:
+            - name: JAVA_OPTS
+              value: "-Xmx2g -Xms1g -XX:+UseG1GC -XX:+UseContainerSupport"
+            - name: DOCKER_ENV
+              value: "true"
+            - name: PLAYWRIGHT_BROWSERS_PATH
+              value: "/root/.cache/ms-playwright"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 18080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 18080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: logs
+              mountPath: /app/logs
+            - name: h2-data
+              mountPath: /app/h2-data
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: h2-data
+          emptyDir: {}
