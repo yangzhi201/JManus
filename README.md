@@ -1,4 +1,4 @@
-# Spring AI Alibaba JManus
+# Spring AI Alibaba Lynxe
 
 <div align="center">
 
@@ -19,13 +19,13 @@
 
 ---
 
-## ✨ About JManus
+## ✨ About Lynxe(Original name: JManus）
 
-JManus is a Java implementation of Manus, currently used in many applications within Alibaba Group. It is primarily used for handling exploratory tasks that require a certain degree of determinism, such as quickly finding data from massive datasets and converting it into a single row in a database, or analyzing logs and issuing alerts.
+Lynxe is a Java implementation of Manus, currently used in many applications within Alibaba Group. It is primarily used for handling exploratory tasks that require a certain degree of determinism, such as quickly finding data from massive datasets and converting it into a single row in a database, or analyzing logs and issuing alerts.
 
-JManus also provides HTTP service invocation capabilities, making it suitable for integration into existing projects. For details, please refer to the [developer quick start guide](./README-dev-en.md).
+Lynxe also provides HTTP service invocation capabilities, making it suitable for integration into existing projects. For details, please refer to the [developer quick start guide](./README-dev-en.md).
 
-## 🎯 JManus Product Features
+## 🎯 Lynxe Product Features
 
 ### 🤖 **Pure Java Manus Implementation**:
 
@@ -33,7 +33,7 @@ A pure Java multi-agent collaboration implementation that provides a complete se
 
 ### 🛠️ **Func-Agent Mode**:
 
-Allows you to precisely control every execution detail, providing extremely high execution determinism and completing complex repetitive processes and functions. For specific examples, see [JManus Use Cases - FuncAgent Use Case](https://github.com/talk-flow/public-usecase/blob/main/eng/query-plan.md)
+Allows you to precisely control every execution detail, providing extremely high execution determinism and completing complex repetitive processes and functions. For specific examples, see [Lynxe Use Cases - FuncAgent Use Case](https://github.com/talk-flow/public-usecase/blob/main/eng/query-plan.md)
 
 ![Image](https://github.com/user-attachments/assets/0075b210-feed-4c67-97e1-e79756493e4e)
 
@@ -45,12 +45,12 @@ Natively supports the Model Context Protocol (MCP) for seamless integration with
 
 ## 🚀 Quick Start
 
-Get JManus up and running in under 5 minutes:
+Get Lynxe up and running in under 5 minutes:
 
 ### Prerequisites
 
 - 🌐 **DashScope API Key** (or alternative AI model provider)
-- ☕ **Java 17+** (for running JAR files or source code execution)
+- ☕ **Java 17+** (for running JAR files or source code execution) or 🐳 **Docker** (for containerized deployment)
 
 ### Method 1: Using GitHub Release (Recommended)
 
@@ -58,16 +58,16 @@ Get JManus up and running in under 5 minutes:
 
 ```bash
 # Download the latest JAR file
-wget https://github.com/spring-ai-alibaba/JManus/releases/latest/download/jmanus.jar
+wget https://github.com/spring-ai-alibaba/Lynxe/releases/latest/download/lynxe.jar
 
 # Or using curl
-curl -L -o jmanus.jar https://github.com/spring-ai-alibaba/JManus/releases/latest/download/jmanus.jar
+curl -L -o lynxe.jar https://github.com/spring-ai-alibaba/Lynxe/releases/latest/download/lynxe.jar
 
 # Run the JAR file
-java -jar jmanus.jar
+java -jar lynxe.jar
 ```
 
-> 💡 **Manual Download**: You can also visit the [JManus Releases page](https://github.com/spring-ai-alibaba/JManus/releases) to manually download the latest JAR file.
+> 💡 **Manual Download**: You can also visit the [Lynxe Releases page](https://github.com/spring-ai-alibaba/Lynxe/releases) to manually download the latest JAR file.
 
 #### 🌐 Access Application
 
@@ -79,13 +79,83 @@ After the application starts, navigate to `http://localhost:18080` in your brows
 
 ---
 
-### Method 2: Running from Source Code (Alternative)
+### Method 2: Using Docker (Recommended for Production)
+
+#### 🐳 Pull and Run Docker Image
+
+```bash
+# Pull the latest Lynxe Docker image
+docker pull ghcr.io/spring-ai-alibaba/lynxe:v4.7.0
+
+# Run the container
+docker run -d \
+  --name lynxe \
+  -p 18080:18080 \
+  ghcr.io/spring-ai-alibaba/lynxe:v4.7.0
+```
+
+#### 🔧 Advanced Docker Configuration
+
+**Run with data persistence (recommended for production):**
+
+```bash
+# Create a directory for data persistence
+mkdir -p ./lynxe-data
+
+# Run with volume mounting
+docker run -d \
+  --name lynxe \
+  -p 18080:18080 \
+  -v $(pwd)/lynxe-data:/app/data \
+  ghcr.io/spring-ai-alibaba/lynxe:v4.7.0
+```
+
+**Run with custom environment variables:**
+
+```bash
+docker run -d \
+  --name lynxe \
+  -p 18080:18080 \
+  -e SPRING_PROFILES_ACTIVE=mysql \
+  -e SPRING_DATASOURCE_URL=jdbc:mysql://host.docker.internal:3306/lynxe \
+  -e SPRING_DATASOURCE_USERNAME=your_username \
+  -e SPRING_DATASOURCE_PASSWORD=your_password \
+  ghcr.io/spring-ai-alibaba/lynxe:v4.7.0
+```
+
+#### 🌐 Access Application
+
+After the container starts, navigate to `http://localhost:18080` in your browser.
+
+> 💡 **Guided Setup**: After the application starts, it will automatically display a guided setup page. On the first page, select your language (English/Chinese), then on the second page, enter your DashScope API key that you just obtained to complete the configuration.
+
+#### 📋 Useful Docker Commands
+
+```bash
+# View container logs
+docker logs -f lynxe
+
+# Stop the container
+docker stop lynxe
+
+# Start the container
+docker start lynxe
+
+# Remove the container
+docker rm lynxe
+```
+
+🎉 **Congratulations!** Your multi-agent system is now running in Docker. You can visit https://github.com/talk-flow/public-usecase to explore some effective practices we recommend.
+
+---
+
+### Method 3: Running from Source Code (Alternative)
 
 #### 1. Clone and Navigate
 
 ```bash
-git clone https://github.com/spring-ai-alibaba/JManus.git
-cd JManus
+git clone https://github.com/spring-ai-alibaba/Lynxe.git
+cd Lynxe
 ```
 
 #### 2. Database Configuration (Optional)
@@ -94,7 +164,7 @@ cd JManus
 >
 > **Using other providers?** Update the configuration in `src/main/resources/application.yml` to use your preferred AI model platform.
 
-JManus supports both H2 (default)、MySQL and PostgreSQL databases.
+Lynxe supports both H2 (default)、MySQL and PostgreSQL databases.
 
 **How To Use MySQL/PostgreSQL**
 
@@ -146,7 +216,7 @@ Navigate to `http://localhost:18080` in your browser.
 ## Stable Release
 
 you can find stable release from here:
-[release](https://github.com/spring-ai-alibaba/JManus/releases)
+[release](https://github.com/spring-ai-alibaba/Lynxe/releases)
 
 ## 🤝 Contributing
 
@@ -156,17 +226,17 @@ We enthusiastically welcome contributions from the developer community! Here's h
 
 You can find available tasks on our [project board](https://github.com/orgs/spring-ai-alibaba/projects/1).
 
-- 🐛 **Bug Reports**: [Submit detailed issue reports](https://github.com/spring-ai-alibaba/JManus/issues)
-- 💡 **Feature Requests**: [Propose innovative enhancements](https://github.com/spring-ai-alibaba/JManus/issues)
+- 🐛 **Bug Reports**: [Submit detailed issue reports](https://github.com/spring-ai-alibaba/Lynxe/issues)
+- 💡 **Feature Requests**: [Propose innovative enhancements](https://github.com/spring-ai-alibaba/Lynxe/issues)
 - 📝 **Documentation**: Help us improve clarity and completeness
-- 🔧 **Code Contributions**: [Submit pull requests](https://github.com/spring-ai-alibaba/JManus/pulls) with your improvements
+- 🔧 **Code Contributions**: [Submit pull requests](https://github.com/spring-ai-alibaba/Lynxe/pulls) with your improvements
 
 ### Development Environment Setup
 
 ```bash
 # Fork and clone the repository
-git clone git@github.com:spring-ai-alibaba/JManus.git
-cd JManus
+git clone git@github.com:spring-ai-alibaba/Lynxe.git
+cd Lynxe
 
 # Install project dependencies
 mvn clean install
@@ -195,6 +265,6 @@ mvn spring-boot:run
 
 **Crafted with ❤️ by the Spring AI Alibaba Team**
 
-⭐ **Star us on GitHub** if JManus accelerated your development journey!
+⭐ **Star us on GitHub** if Lynxe accelerated your development journey!
 
 </div>
