@@ -24,8 +24,8 @@ const words: I18nType = {
 
   // Initialization page
   init: {
-    welcome: 'Welcome to JManus',
-    welcomeStep: 'Welcome to JManus',
+    welcome: 'Welcome to Lynxe',
+    welcomeStep: 'Welcome to Lynxe',
     description:
       'To get started, you need to configure an LLM service to enable AI features. You can choose Alibaba Cloud DashScope or configure any OpenAI-compatible API service.',
     languageStepDescription:
@@ -203,6 +203,7 @@ const words: I18nType = {
       mcp: 'Tools/MCP Configuration',
       database: 'Database Configuration',
       namespace: 'Namespace Configuration',
+      planTemplate: 'Plan Template Management',
     },
     subGroupDisplayNames: {
       agent: 'Agent',
@@ -432,7 +433,9 @@ const words: I18nType = {
       selectType: 'Select database type',
       enable: 'Enable',
       url: 'URL',
-      urlPlaceholder: 'e.g.: jdbc:mysql://localhost:3306/dbname',
+      urlPlaceholder: 'e.g.: localhost:3306/dbname',
+      urlHint:
+        'Enter connection string (e.g., localhost:3306/dbname). JDBC prefix will be added automatically.',
       driverClassName: 'Driver Class Name',
       driverClassNamePlaceholder: 'e.g.: com.mysql.cj.jdbc.Driver',
       driverClassNameHint: 'Auto-filled based on database type',
@@ -455,11 +458,15 @@ const words: I18nType = {
       browserSettings: {
         headless: 'Whether to use headless browser mode',
         requestTimeout: 'Browser request timeout (seconds)',
+        enableShortUrl:
+          'Enable short URLs: Short URLs can reduce browser context consumption by 40%, recommended to enable',
       },
       general: {
         debugDetail:
           'Debug mode: The model will output more content to facilitate problem - finding, but it will be slower',
-        baseDir: 'Manus root directory',
+        externalLinkedFolder:
+          "External Directory Mapping: You can specify an external directory, and the system will map this directory to a subdirectory under each task, so you don't need to import the content. You can use an absolute directory path with or without a trailing slash.",
+        enableConversationMemory: 'Enable Conversation Memory',
       },
       interactionSettings: {
         openBrowser: 'Automatically open the browser on startup',
@@ -522,7 +529,7 @@ const words: I18nType = {
       resetFailed: 'Reset failed, please try again',
       importFailed: 'Import failed, please check file format',
       groupDisplayNames: {
-        manus: 'Manus',
+        lynxe: 'Lynxe',
         browser: 'Browser',
         interaction: 'Interaction',
         system: 'System',
@@ -556,6 +563,30 @@ const words: I18nType = {
         selectNamespace: 'Please select a namespace',
         namespace: 'Namespace',
       },
+    },
+    // Plan Template Management page
+    planTemplate: {
+      title: 'Plan Template Management',
+      totalTemplates: 'Total Templates',
+      export: 'Export',
+      exportAll: 'Export All',
+      exportGroup: 'Export Group',
+      import: 'Import',
+      noTemplates: 'No plan templates available',
+      untitled: 'Untitled',
+      serviceGroup: 'Service Group',
+      noServiceGroup: 'Ungrouped',
+      planType: 'Plan Type',
+      steps: 'Steps',
+      groupCount: '{count} templates',
+      exportSuccess: 'Plan templates exported successfully',
+      exportFailed: 'Failed to export plan templates',
+      importSuccess: 'Import completed: {total} total, {success} successful, {failed} failed',
+      importFailed: 'Failed to import plan templates',
+      importConfirm:
+        'This will overwrite existing templates with the same planTemplateId. Continue?',
+      invalidFormat: 'Invalid file format. Expected a JSON array of plan templates.',
+      loadFailed: 'Failed to load plan templates',
     },
   },
 
@@ -685,8 +716,8 @@ const words: I18nType = {
 
   // Chat component
   chat: {
-    botName: 'JManus:',
-    thinkingLabel: 'JManus Thinking/Processing',
+    botName: 'Lynxe:',
+    thinkingLabel: 'Lynxe Thinking/Processing',
     processing: 'Processing...',
     step: 'Step',
     stepNumber: 'Step {number}',
@@ -748,17 +779,19 @@ const words: I18nType = {
     triggeredByTool: 'Triggered by Tool',
     planExecution: 'Plan Execution',
     userInputRequired: 'User Input Required',
+    funcAgentExecutionDetails: 'Func-Agent Execution Details',
+    clickToViewExecutionDetails: 'Click to view execution details',
   },
 
   // Input component
   input: {
-    placeholder: 'Send a message to JManus',
+    placeholder: 'Send a message to Lynxe',
     send: 'Send',
     stop: 'Stop',
     planMode: 'Func-Agent Mode',
     selectionTitle: 'Select Option',
     selectPlaceholder: 'Please select',
-    defaultFuncAgent: 'Use Default FuncAgent to Process Conversation',
+    chatMode: 'Ask',
     waiting: 'Waiting for user input...',
     maxLength: 'Max Length',
     charactersRemaining: 'Characters Remaining',
@@ -773,14 +806,15 @@ const words: I18nType = {
     unsupportedFileType: 'Unsupported file type',
     fileSizeExceeded: 'File size exceeded limit',
     maxFileSize: 'Max file size: 50MB',
-    supportedFormats: 'Supported formats: PDF, text, CSV, JSON, XML, HTML, logs, code files, etc.',
+    supportedFormats:
+      'Supported formats: PDF, text, CSV, JSON, XML, HTML, MHTML, logs, code files, etc.',
   },
 
   // Sidebar
   sidebar: {
     title: 'Func-Agent Template Name',
     templateList: 'Template List',
-    configuration: 'Configuration',
+    configuration: 'Func-Agent Config',
     newPlan: 'New Func-Agent Plan',
     loading: 'Loading...',
     retry: 'Retry',
@@ -788,6 +822,11 @@ const words: I18nType = {
     unnamedPlan: 'Unnamed Plan',
     noDescription: 'No description',
     deleteTemplate: 'Delete this plan template',
+    deleteConfirm: 'Delete Confirmation',
+    deleteConfirmMessage:
+      'Are you sure you want to delete plan template "{templateName}"? This action cannot be undone.',
+    deleteSuccess: 'Plan template deleted successfully',
+    deleteFailed: 'Failed to delete plan template',
     jsonTemplate: 'Func-Agent Plan Template Editor',
     rollback: 'Rollback',
     restore: 'Restore',
@@ -804,8 +843,10 @@ const words: I18nType = {
       'When executing repeatedly, you can set some content in Step 2 as variables, then specify the specific values for those variables here. For example, set "Variable1" in the JSON, then set "Variable1=Alibaba" here to achieve function parameter-like effects.',
     clearParams: 'Clear Parameters',
     parameterRequirements: 'Parameter Requirements',
+    historyUp: 'Previous value',
+    historyDown: 'Next value',
     parameterRequirementsHelp:
-      'You can embed variable parameters in the "task requirements section" using <<parameter_name>> format. After saving, these variable parameters can be used in the subsequent service publishing.',
+      'In the template editor\'s "Task Requirements" section, you can define variable parameters using <<parameter_name>> format (multiple parameters are allowed) to inform the model what format of input your function requires. The default description is the parameter name.',
     clearAllParams: 'Clear All Parameters',
     noParametersRequired: 'This plan template does not require any parameters',
     fillAllRequiredParameters: 'Please fill in all required parameters',
@@ -813,6 +854,10 @@ const words: I18nType = {
     statusApiUrl: 'Status Query API',
     executing: 'Executing...',
     executePlan: 'Execute Plan',
+    stopTask: 'Stop Task',
+    toolNameRequired: 'Tool name is required. Please ensure the template is properly configured',
+    executionInProgress:
+      'A task is currently executing. Please wait for it to complete before starting a new one',
     publishMcpService: 'Publish as Tool Service',
     updateServiceStatus: 'Update Service Status',
 
@@ -860,6 +905,8 @@ const words: I18nType = {
     usage: 'Usage',
     example: 'Example',
     enterValueFor: 'Enter value for {param}',
+    defaultPlanId: 'System returned PlanID',
+    defaultPlanIdDetails: 'The planId that the system just returned',
     newTemplate: 'New Template',
     templateName: 'Template Name',
     templateDescription: 'Template Description',
@@ -898,6 +945,13 @@ const words: I18nType = {
     updateSuccess: 'Plan updated successfully!',
     updateFailed: 'Failed to update plan',
     executeFailed: 'Failed to execute plan',
+    copyPlan: 'Copy Plan',
+    newPlanTitle: 'New Plan Title',
+    enterNewPlanTitle: 'Enter new plan title',
+    copying: 'Copying...',
+    copyPlanSuccess: 'Plan copied successfully: {title}',
+    copyPlanFailed: 'Failed to copy plan: {message}',
+    duplicatePlanTitle: 'Duplicate plan title',
     unknown: 'Unknown',
     newTemplateName: 'New Execution Plan',
     newTemplateDescription: 'Please use the plan generator to create a new plan template',
@@ -916,7 +970,7 @@ const words: I18nType = {
       'Please enter the specific requirements and description for this task...',
     terminateColumns: 'Task Output Requirements Description',
     terminateColumnsPlaceholder:
-      'Specify structured return values. If specified, returns a JSON list where each row contains your specified columns. For example: col1,col2 will output [(col1:val1,col2:val2), (col1:val3,col2:val4)]',
+      'Specify structured return, for example: col1,col2, will return a json list',
     preview: 'Preview',
     systemWillReturnListWithTableHeaderFormat:
       'System will return a multi-row list in JSON format with table header',
@@ -1085,10 +1139,9 @@ const words: I18nType = {
 
   // Home page
   home: {
-    welcomeTitle: 'Welcome to JManus!',
+    welcomeTitle: 'Welcome to Lynxe!',
     welcomeSubtitle:
       'Your Java AI intelligent assistant, helping you build and complete various tasks.',
-    tagline: 'Java AI Agent',
     inputPlaceholder: 'Describe what you want to build or accomplish...',
     directButton: 'Enter Workbench Directly',
     examples: {
@@ -1135,6 +1188,19 @@ const words: I18nType = {
     stepExecutionDetails: 'Step Execution Details',
     noStepSelected: 'No Step Selected',
     selectStepHint: 'Please select an execution step in the left chat area to view details',
+    noTemplateSelected: 'No Template Selected',
+    selectTemplateHint: 'Please select a template from the left sidebar to configure',
+    newFuncAgentPlan: 'New Func-Agent Plan',
+    importExistingPlan: 'Import Existing Plan',
+    importDescription: 'You can view and import excellent examples from the',
+    promptLibrary: 'Public Prompt Library',
+    importDescriptionSuffix: 'to get started quickly',
+    newPlanCreated: 'New plan created successfully',
+    createPlanFailed: 'Failed to create new plan',
+    importSuccess: 'Successfully imported {success} of {total} plan(s)',
+    importFailed: 'Failed to import plan',
+    invalidImportFormat:
+      'Invalid import format. Please provide a valid JSON array of plan templates',
     stepExecuting: 'Step is executing, please wait...',
     step: 'Step',
     executingAgent: 'Executing Agent',
@@ -1148,6 +1214,7 @@ const words: I18nType = {
     output: 'Output',
     tool: 'Tool',
     toolParameters: 'Tool Parameters',
+    noToolsExecuted: 'No tools were executed in this action',
     noStepDetails: 'No detailed step information available',
     scrollToBottom: 'Scroll to Bottom',
     stepInfo: 'Step Information',
@@ -1243,8 +1310,8 @@ const words: I18nType = {
     templateHelpText: 'After selection, the cron task will execute according to the defined plan',
     createTask: 'Create Cron Task',
     selectCreateMethod: 'Please select creation method',
-    createWithJmanus: 'Create with Jmanus',
-    createWithJmanusDesc: 'Create cron task with AI assistant guidance',
+    createWithLynxe: 'Create with Lynxe',
+    createWithLynxeDesc: 'Create cron task with AI assistant guidance',
     createManually: 'Create Manually',
     createManuallyDesc: 'Fill in task information yourself',
   },
@@ -1280,8 +1347,8 @@ const words: I18nType = {
     toolDescriptionRequired: 'Tool Description *',
     toolDescriptionPlaceholder: 'Please enter tool description',
     toolDescriptionDescription:
-      'Tell the model when to use this tool. The more detailed you write (when to choose, when not to choose), the more accurate the model will be in selecting tools.',
-    serviceGroup: 'Service Group *',
+      'Tell the model when to use this tool. The more detailed you write, the more accurate the model will be in selecting tools. Default value is the tool name.',
+    serviceGroup: 'Service Group',
     serviceGroupPlaceholder: 'Please enter service group',
     serviceGroupDescription:
       'Used to group tools, making it easier for you to find your tool among many tools.',
@@ -1306,6 +1373,9 @@ const words: I18nType = {
     publishAsInternalToolcall: 'Publish as Internal Toolcall',
     publishAsInternalToolcallDescription:
       'When checked, this will be published as an internal tool that can be used by agents in their tool configuration',
+    enableInConversation: 'Enable in Conversation',
+    enableInConversationDescription:
+      'When checked, this tool will be available for use in conversation mode, allowing the AI to call this function during chat interactions.',
     publishing: 'Publishing...',
     delete: 'Delete',
     deleting: 'Deleting...',
@@ -1353,6 +1423,7 @@ const words: I18nType = {
     selectMemory: 'Select Memory',
     clearMemory: 'Clear Memory',
     newChat: 'new chat',
+    loadHistoryFailed: 'Failed to load conversation history',
   },
   // Common placeholders
   selectCommon: {

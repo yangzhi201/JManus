@@ -35,7 +35,6 @@ export interface StepData {
 export interface PlanData {
   title: string
   steps: StepData[]
-  directResponse: boolean
   planTemplateId?: string
   planType?: string
   replacementParams?: Record<string, string>
@@ -50,7 +49,6 @@ export interface PlanData {
 export interface DisplayPlanData {
   title: string
   steps: StepData[]
-  directResponse: boolean
   planTemplateId?: string
   planType?: string
 }
@@ -71,4 +69,8 @@ export interface PlanExecutionRequestPayload {
   uploadedFiles?: string[] | undefined
   /** Optional upload session key */
   uploadKey?: string | null | undefined
+  /** Tool name (from template.title) for API execution */
+  toolName?: string | undefined
+  /** Service group (from template.serviceGroup) for API execution */
+  serviceGroup?: string | undefined
 }

@@ -24,8 +24,8 @@ const words: I18nType = {
 
   // 初始化页面
   init: {
-    welcome: '欢迎使用 JManus',
-    welcomeStep: '欢迎使用 JManus',
+    welcome: '欢迎使用 Lynxe',
+    welcomeStep: '欢迎使用 Lynxe',
     description:
       '首次使用需要配置 LLM 服务来启用 AI 功能。您可以选择使用阿里云百炼服务或自定义 OpenAI 兼容的 API 服务。',
     languageStepDescription: '请选择您的语言偏好，这将作为默认界面语言。',
@@ -199,6 +199,7 @@ const words: I18nType = {
       mcp: 'Tools/MCP配置',
       database: '数据库配置',
       namespace: '命名空间配置',
+      planTemplate: '计划模板管理',
     },
     subGroupDisplayNames: {
       agent: 'Agent',
@@ -422,7 +423,8 @@ const words: I18nType = {
       selectType: '选择数据库类型',
       enable: '启用',
       url: 'URL',
-      urlPlaceholder: '例如: jdbc:mysql://localhost:3306/dbname',
+      urlPlaceholder: '例如: localhost:3306/dbname',
+      urlHint: '输入连接字符串（例如: localhost:3306/dbname）。JDBC 前缀将自动添加。',
       driverClassName: '驱动类名',
       driverClassNamePlaceholder: '例如: com.mysql.cj.jdbc.Driver',
       driverClassNameHint: '根据数据库类型自动填充',
@@ -444,10 +446,13 @@ const words: I18nType = {
       browserSettings: {
         headless: '是否使用无头浏览器模式',
         requestTimeout: '浏览器请求超时时间(秒)',
+        enableShortUrl: '开启短连接：短连接可以降低40%的浏览器上下文消耗 推荐打开',
       },
       general: {
         debugDetail: 'debug模式 ：会要求模型输出更多内容，方便查找问题，但速度更慢',
-        baseDir: 'manus根目录',
+        externalLinkedFolder:
+          '外部目录映射 : 你可以指定一个外部的目录，系统会把这个目录映射到每个任务的一个子目录下面，这样就可以不需要将内容导入。 你可以用 带/或者不带/的绝对目录',
+        enableConversationMemory: '开启对话记忆',
       },
       interactionSettings: {
         openBrowser: '启动时自动打开浏览器',
@@ -509,7 +514,7 @@ const words: I18nType = {
       resetFailed: '重置失败，请重试',
       importFailed: '导入失败，请检查文件格式',
       groupDisplayNames: {
-        manus: 'Manus',
+        lynxe: 'Lynxe',
         browser: '浏览器',
         interaction: '交互',
         system: '系统',
@@ -543,6 +548,29 @@ const words: I18nType = {
         selectNamespace: '请选择命名空间',
         namespace: '命名空间',
       },
+    },
+    // 计划模板管理页面
+    planTemplate: {
+      title: '计划模板管理',
+      totalTemplates: '模板总数',
+      export: '导出',
+      exportAll: '全部导出',
+      exportGroup: '导出组',
+      import: '导入',
+      noTemplates: '暂无计划模板',
+      untitled: '未命名',
+      serviceGroup: '服务组',
+      noServiceGroup: '未分组',
+      planType: '计划类型',
+      steps: '步骤数',
+      groupCount: '共 {count} 个模板',
+      exportSuccess: '计划模板导出成功',
+      exportFailed: '导出计划模板失败',
+      importSuccess: '导入完成：共 {total} 个，成功 {success} 个，失败 {failed} 个',
+      importFailed: '导入计划模板失败',
+      importConfirm: '这将覆盖具有相同 planTemplateId 的现有模板。是否继续？',
+      invalidFormat: '文件格式无效。应为计划模板的 JSON 数组。',
+      loadFailed: '加载计划模板失败',
     },
   },
 
@@ -640,8 +668,8 @@ const words: I18nType = {
 
   // 聊天组件
   chat: {
-    botName: 'JManus:',
-    thinkingLabel: 'JManus 思考/处理',
+    botName: 'Lynxe:',
+    thinkingLabel: 'Lynxe 思考/处理',
     processing: '处理中...',
     step: '步骤',
     stepNumber: '步骤 {number}',
@@ -703,17 +731,19 @@ const words: I18nType = {
     triggeredByTool: '由工具触发',
     planExecution: '计划执行',
     userInputRequired: '需要用户输入',
+    funcAgentExecutionDetails: 'Func-Agent 执行详情',
+    clickToViewExecutionDetails: '点击查看执行详情',
   },
 
   // 输入组件
   input: {
-    placeholder: '向 JManus 发送消息',
+    placeholder: '向 Lynxe 发送消息',
     send: '发送',
     stop: '停止',
     planMode: 'Func-Agent模式',
     selectionTitle: '选择选项',
     selectPlaceholder: '请选择',
-    defaultFuncAgent: '使用默认FuncAgent处理对话',
+    chatMode: 'Ask',
     waiting: '等待用户输入...',
     maxLength: '最大长度',
     charactersRemaining: '剩余字符',
@@ -728,14 +758,14 @@ const words: I18nType = {
     unsupportedFileType: '不支持的文件类型',
     fileSizeExceeded: '文件大小超出限制',
     maxFileSize: '最大文件大小：50MB',
-    supportedFormats: '支持的格式：PDF、文本、CSV、JSON、XML、HTML、日志、代码文件等',
+    supportedFormats: '支持的格式：PDF、文本、CSV、JSON、XML、HTML、MHTML、日志、代码文件等',
   },
 
   // 侧边栏
   sidebar: {
     title: 'Func-Agent 编辑器',
     templateList: '模板列表',
-    configuration: '配置',
+    configuration: 'Func-Agent配置',
     newPlan: '新建Func-Agent计划',
     loading: '加载中...',
     retry: '重试',
@@ -743,6 +773,10 @@ const words: I18nType = {
     unnamedPlan: '未命名计划',
     noDescription: '无描述',
     deleteTemplate: '删除此计划模板',
+    deleteConfirm: '删除确认',
+    deleteConfirmMessage: '确定要删除计划模板 "{templateName}" 吗？此操作不可恢复。',
+    deleteSuccess: '计划模板删除成功',
+    deleteFailed: '删除计划模板失败',
     jsonTemplate: 'Func-Agent计划模板编辑器',
     rollback: '回滚',
     restore: '恢复',
@@ -760,14 +794,19 @@ const words: I18nType = {
     clearParams: '清空参数',
     parameterRequirements: '参数要求',
     parameterRequirementsHelp:
-      '你可以在模版编辑器的 "任务要求" 栏目里面通过<<参数名>>的方式植入可变参数（可以是多个），当选择保存以后，就可以在后面的发布服务中使用这些可变参数了',
+      '在模版编辑器的 "任务要求" 栏目中，你可以通过<<参数名>>的方式定义可变参数（可以是多个），用于告知模型你的函数需要什么格式的输入。默认描述为参数名称。',
     clearAllParams: '清空所有参数',
+    historyUp: '上一个值',
+    historyDown: '下一个值',
     noParametersRequired: '此计划模板不需要任何参数',
     fillAllRequiredParameters: '请填写所有必需的参数',
     apiUrl: 'HTTP GET URL',
     statusApiUrl: '状态查询 API',
     executing: '执行中...',
     executePlan: '执行计划',
+    stopTask: '停止任务',
+    toolNameRequired: '工具名称是必需的，请确保模板已正确配置',
+    executionInProgress: '当前有任务正在执行中，请等待完成后再发起新任务',
     publishMcpService: '发布为工具服务',
     updateServiceStatus: '更新服务状态',
 
@@ -819,6 +858,9 @@ const words: I18nType = {
     noPlanToCopy: '没有可复制的计划',
     copyPlanSuccess: '计划复制成功: {title}',
     copyPlanFailed: '计划复制失败: {message}',
+    duplicatePlanTitle: '有重复计划标题',
+    defaultPlanId: '系统返回的PlanID',
+    defaultPlanIdDetails: '系统刚才返回的那个planId',
 
     newTemplate: '新建模板',
     templateName: '模板名称',
@@ -873,7 +915,7 @@ const words: I18nType = {
     stepRequirementPlaceholder: '请输入任务的具体需求和描述...',
     terminateColumns: '任务输出要求描述',
     terminateColumnsPlaceholder:
-      '指定结构化返回值，如果指定，则返回为一个json 列表 ，每一行都是你指定的col。 例如： col1,col2 ，最后会输出 [(col1:val1,col2:val2), (col1:val3,col2:val4)]',
+      '要求模型结构化返回一个列表，你可以在这里指定表头 例如： col1,col2',
     preview: '预览',
     systemWillReturnListWithTableHeaderFormat: '系统将以json格式返回一个多行列表，表头为',
     titlePlaceholder: '请输入计划标题...',
@@ -1040,9 +1082,8 @@ const words: I18nType = {
 
   // 首页
   home: {
-    welcomeTitle: '欢迎使用 JManus！',
+    welcomeTitle: '欢迎使用 Lynxe！',
     welcomeSubtitle: '您的 Java AI 智能助手，帮助您构建和完成各种任务。',
-    tagline: 'Java AI 智能体',
     inputPlaceholder: '描述您想构建或完成的内容...',
     directButton: '直接进入工作台',
     examples: {
@@ -1084,6 +1125,18 @@ const words: I18nType = {
     stepExecutionDetails: '步骤执行详情',
     noStepSelected: '未选择执行步骤',
     selectStepHint: '请在左侧聊天区域选择一个执行步骤查看详情',
+    noTemplateSelected: '未选择模板',
+    selectTemplateHint: '请从左侧边栏选择一个模板进行配置',
+    newFuncAgentPlan: '新建 Func-Agent计划',
+    importExistingPlan: '导入既有计划',
+    importDescription: '您可以通过',
+    promptLibrary: '公共 prompt库',
+    importDescriptionSuffix: '查看和导入优秀的案例并快速开始使用',
+    newPlanCreated: '新计划创建成功',
+    createPlanFailed: '创建新计划失败',
+    importSuccess: '成功导入 {success}/{total} 个计划',
+    importFailed: '导入计划失败',
+    invalidImportFormat: '无效的导入格式。请提供有效的计划模板JSON数组',
     stepExecuting: '步骤正在执行中，请稍候...',
     step: '步骤',
     executingAgent: '执行智能体',
@@ -1097,6 +1150,7 @@ const words: I18nType = {
     output: '输出',
     tool: '工具',
     toolParameters: '工具参数',
+    noToolsExecuted: '此操作中未执行任何工具',
     noStepDetails: '暂无详细步骤信息',
     scrollToBottom: '滚动到底部',
     stepInfo: '步骤信息',
@@ -1191,8 +1245,8 @@ const words: I18nType = {
     templateHelpText: '选择后，定时任务将按照制定好的计划执行',
     createTask: '创建定时任务',
     selectCreateMethod: '请选择创建方式',
-    createWithJmanus: '让Jmanus帮忙创建',
-    createWithJmanusDesc: '通过AI助手引导创建定时任务',
+    createWithLynxe: '让Lynxe帮忙创建',
+    createWithLynxeDesc: '通过AI助手引导创建定时任务',
     createManually: '手动创建',
     createManuallyDesc: '自己填写定时任务信息',
   },
@@ -1225,8 +1279,8 @@ const words: I18nType = {
     toolDescriptionRequired: '工具描述 *',
     toolDescriptionPlaceholder: '请输入工具描述',
     toolDescriptionDescription:
-      '告知模型，在什么时候需要使用这个工具，写的越详细（什么时候选择，什么时候不选择），模型选工具的准确性越高。',
-    serviceGroup: '服务组 *',
+      '告知模型，在什么时候需要使用这个工具，写的越详细，模型选工具的准确性越高。默认值是工具名称',
+    serviceGroup: '服务组',
     serviceGroupPlaceholder: '请输入服务组',
     serviceGroupDescription: '用来分组工具，方便你从大量工具里面找到你的那个工具。',
     parameterConfig: '参数配置',
@@ -1247,6 +1301,9 @@ const words: I18nType = {
     publishAsInternalToolcall: '发布为内部工具调用',
     publishAsInternalToolcallDescription:
       '勾选后将发布为内部工具，可以在智能体配置中添加此工具并使用',
+    enableInConversation: '在对话中启用',
+    enableInConversationDescription:
+      '勾选后，此工具将在对话模式中可用，允许AI在聊天交互过程中调用此功能。',
     publishing: '发布中...',
     delete: '删除',
     deleting: '删除中...',
@@ -1294,6 +1351,7 @@ const words: I18nType = {
     selectMemory: '选择记忆',
     clearMemory: '清除记忆',
     newChat: '新建对话',
+    loadHistoryFailed: '加载对话历史失败',
   },
   selectCommon: {
     pleaseSelect: '请选择...',

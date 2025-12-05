@@ -52,14 +52,6 @@
                         </h3>
                       </div>
 
-                      <div
-                        class="toggle-container"
-                        @click.stop="
-                          showNameEditModal(message.conversation_id, message.memory_name)
-                        "
-                      >
-                        <Icon icon="carbon:edit" class="edit-btn"> </Icon>
-                      </div>
                       <div class="action-buttons">
                         <button
                           class="delete-btn"
@@ -80,23 +72,6 @@
                           <Icon icon="carbon:delete"></Icon>
                         </button>
                       </div>
-                    </div>
-
-                    <div class="message-preview">
-                      <p class="preview-line">
-                        {{
-                          message.messages && message.messages.length > 0
-                            ? message.messages[0].text
-                            : 'none message'
-                        }}
-                      </p>
-                      <p
-                        class="preview-line"
-                        style="opacity: 0.8"
-                        v-if="message.messages && message.messages.length > 1"
-                      >
-                        {{ message.messages[1].text }}
-                      </p>
                     </div>
 
                     <div class="message-meta">
@@ -285,14 +260,14 @@ const loadMessages = async () => {
 }
 
 const selectMemory = (conversationId: string) => {
-  memoryStore.selectMemory(conversationId)
+  memoryStore.selectConversation(conversationId)
   emit('memory-selected')
 }
 
 const formatTimestamp = (timestamp: number | string): string => {
   const timestampNum = typeof timestamp === 'string' ? parseInt(timestamp, 10) : timestamp
   if (isNaN(timestampNum) || timestampNum <= 0) {
-    return 'unknow time'
+    return '--'
   }
   const date = new Date(timestampNum.toString().length === 13 ? timestampNum : timestampNum * 1000)
 
@@ -325,13 +300,6 @@ const handleSearch = () => {
     return matchesName || matchesId || matchesContent
   })
 }
-
-const showNameEditModal = (messageId: string, currentName: string) => {
-  currentEditMessageId.value = messageId
-  nameInput.value = currentName
-  showNameModal.value = true
-}
-
 const closeNameModal = () => {
   showNameModal.value = false
   currentEditMessageId.value = null
@@ -394,8 +362,13 @@ const confirmDelete = async () => {
     await MemoryApiService.deleteMemory(currentDeleteId.value)
     messages.value = messages.value.filter(msg => msg.conversation_id !== currentDeleteId.value)
     handleSearch()
+    // Clear selected conversation if the deleted one was selected
+    if (memoryStore.conversationId === currentDeleteId.value) {
+      memoryStore.clearSelectedConversation()
+    }
+    // If no messages left, clear selection
     if (messages.value.length === 0) {
-      memoryStore.clearMemoryId()
+      memoryStore.clearSelectedConversation()
     }
     showDeleteModal.value = false
     currentDeleteId.value = null
@@ -573,7 +546,7 @@ const confirmDelete = async () => {
   cursor: pointer;
 }
 
-.sender-div:hover:not(:has(.edit-btn:hover, .down-btn:hover, .delete-btn:hover)) .sender-name {
+.sender-div:hover .sender-name {
   color: #667eea;
 }
 
@@ -583,23 +556,6 @@ const confirmDelete = async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.message-preview {
-  margin-bottom: 0.25rem;
-  padding: 8px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-}
-
-.preview-line {
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.7);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 0.125rem;
 }
 
 .message-meta {
@@ -636,13 +592,6 @@ const confirmDelete = async () => {
   border-radius: 1rem;
 }
 
-.toggle-container {
-  margin-left: auto;
-  margin-top: 4px;
-  display: flex;
-  align-items: center;
-}
-
 .action-buttons {
   margin-left: 0.5rem;
   transition: opacity 0.2s ease;
@@ -650,15 +599,6 @@ const confirmDelete = async () => {
 
 .message-item:hover .action-buttons {
   opacity: 1;
-}
-
-.edit-btn {
-  margin-left: 10px;
-  cursor: pointer;
-}
-
-.edit-btn:hover {
-  color: #667eea;
 }
 
 .down-btn {
@@ -687,9 +627,6 @@ const confirmDelete = async () => {
   border-top: 1px solid #444444;
   padding: 0.75rem;
   animation: fadeIn 0.3s ease-in-out;
-}
-
-.message-bubble {
 }
 
 .bubble-avatar {

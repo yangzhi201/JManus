@@ -17,6 +17,15 @@
   <div class="right-panel">
     <div class="preview-header">
       <div class="preview-tabs">
+        <!-- Func-Agent Config tab -->
+        <div
+          class="tab-item"
+          :class="{ active: activeTab === 'config' }"
+          @click="activeTab = 'config'"
+        >
+          <Icon icon="carbon:settings" />
+          <span>{{ t('sidebar.configuration') }}</span>
+        </div>
         <!-- Step Execution Details tab -->
         <div
           class="tab-item"
@@ -39,6 +48,62 @@
     </div>
 
     <div class="preview-content">
+      <!-- Func-Agent Config -->
+      <div v-if="activeTab === 'config'" class="config-tab-content">
+        <div v-if="templateConfig.selectedTemplate.value" class="config-container">
+          <!-- Template Info Header -->
+          <div class="template-info-header">
+            <div class="template-info">
+              <h3>
+                {{ templateConfig.selectedTemplate.value.title || t('sidebar.unnamedPlan') }}
+              </h3>
+              <span class="template-id"
+                >ID: {{ templateConfig.selectedTemplate.value.planTemplateId }}</span
+              >
+            </div>
+            <button class="back-to-list-btn" @click="sidebarStore.switchToTab('list')">
+              <Icon icon="carbon:arrow-left" width="16" />
+            </button>
+          </div>
+
+          <!-- JSON Editor -->
+          <JsonEditorV2 />
+
+          <!-- Execution Controller -->
+          <ExecutionController />
+        </div>
+        <div v-else class="no-template-selected">
+          <div class="action-buttons">
+            <button class="new-task-btn" @click="handleCreateNewPlan">
+              <Icon icon="carbon:add" width="16" />
+              {{ t('rightPanel.newFuncAgentPlan') }}
+            </button>
+            <label class="new-task-btn" :title="t('rightPanel.importExistingPlan')">
+              <Icon icon="carbon:import" width="16" />
+              {{ t('rightPanel.importExistingPlan') }}
+              <input
+                type="file"
+                accept=".json"
+                @change="handleImportExistingPlan"
+                style="display: none"
+              />
+            </label>
+          </div>
+          <p class="import-description">
+            {{ t('rightPanel.importDescription') }}
+            <a
+              href="https://github.com/Lynxe-public/Lynxe-public-prompts"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="prompt-library-link"
+            >
+              {{ t('rightPanel.promptLibrary') }}
+            </a>
+            {{ t('rightPanel.importDescriptionSuffix') }}
+          </p>
+        </div>
+      </div>
+
       <!-- Step Execution Details -->
       <div v-if="activeTab === 'details'" class="step-details">
         <!-- Step basic information -->
@@ -54,20 +119,24 @@
           <div class="agent-info" v-if="selectedStep.agentExecution">
             <div class="info-item">
               <span class="label">{{ t('rightPanel.executingAgent') }}:</span>
-              <span class="value">{{ selectedStep.agentExecution.agentName }}</span>
+              <span
+                class="value"
+                :title="
+                  selectedStep.agentExecution.agentName === 'ConfigurableDynaAgent'
+                    ? t('chat.clickToViewExecutionDetails')
+                    : ''
+                "
+              >
+                {{
+                  selectedStep.agentExecution.agentName === 'ConfigurableDynaAgent'
+                    ? t('chat.funcAgentExecutionDetails')
+                    : selectedStep.agentExecution.agentName
+                }}
+              </span>
             </div>
             <div class="info-item">
               <span class="label">{{ t('rightPanel.callingModel') }}:</span>
               <span class="value">{{ selectedStep.agentExecution.modelName }}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">{{ t('rightPanel.executionResult') }}:</span>
-              <span
-                class="value"
-                :class="{ success: selectedStep.agentExecution.status === 'FINISHED' }"
-              >
-                {{ selectedStep.agentExecution.status || t('rightPanel.executing') }}
-              </span>
             </div>
           </div>
 
@@ -124,12 +193,44 @@
                     </h5>
                     <div class="think-content">
                       <div class="input">
-                        <span class="label">{{ t('rightPanel.input') }}:</span>
-                        <pre>{{ formatJson(tas.thinkInput) }}</pre>
+                        <div class="label-row">
+                          <span class="label">{{ t('rightPanel.input') }}:</span>
+                          <div class="label-actions">
+                            <button
+                              class="copy-btn"
+                              @click="copyToClipboard(tas.thinkInput)"
+                              :title="t('rightPanel.copyToClipboard')"
+                            >
+                              <Icon icon="carbon:copy" />
+                            </button>
+                            <span class="char-count-badge"
+                              >{{ tas.inputCharCount ?? 0 }} chars</span
+                            >
+                          </div>
+                        </div>
+                        <div class="pre-container">
+                          <pre>{{ formatJson(tas.thinkInput) }}</pre>
+                        </div>
                       </div>
                       <div class="output">
-                        <span class="label">{{ t('rightPanel.output') }}:</span>
-                        <pre>{{ formatJson(tas.thinkOutput) }}</pre>
+                        <div class="label-row">
+                          <span class="label">{{ t('rightPanel.output') }}:</span>
+                          <div class="label-actions">
+                            <button
+                              class="copy-btn"
+                              @click="copyToClipboard(tas.thinkOutput)"
+                              :title="t('rightPanel.copyToClipboard')"
+                            >
+                              <Icon icon="carbon:copy" />
+                            </button>
+                            <span class="char-count-badge"
+                              >{{ tas.outputCharCount ?? 0 }} chars</span
+                            >
+                          </div>
+                        </div>
+                        <div class="pre-container">
+                          <pre>{{ formatJson(tas.thinkOutput) }}</pre>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -141,19 +242,29 @@
                       {{ t('rightPanel.action') }}
                     </h5>
                     <div class="action-content">
-                      <div v-for="(actToolInfo, index) in tas.actToolInfoList" :key="index">
+                      <div
+                        v-for="(actToolInfo, index) in tas.actToolInfoList || []"
+                        :key="`tool-${index}-${actToolInfo?.id || actToolInfo?.name || index}`"
+                        class="tool-execution-item"
+                      >
                         <div class="tool-info">
                           <span class="label">{{ t('rightPanel.tool') }}:</span>
-                          <span class="value">{{ actToolInfo.name || '' }}</span>
+                          <span class="value">{{ actToolInfo?.name || 'N/A' }}</span>
                         </div>
                         <div class="input">
                           <span class="label">{{ t('rightPanel.toolParameters') }}:</span>
-                          <pre>{{ formatJson(actToolInfo.parameters) }}</pre>
+                          <pre>{{ formatJson(actToolInfo?.parameters) }}</pre>
                         </div>
                         <div class="output">
                           <span class="label">{{ t('rightPanel.executionResult') }}:</span>
-                          <pre>{{ formatJson(actToolInfo.result) }}</pre>
+                          <pre>{{ formatJson(actToolInfo?.result) }}</pre>
                         </div>
+                      </div>
+                      <div
+                        v-if="!tas.actToolInfoList || tas.actToolInfoList.length === 0"
+                        class="no-tools"
+                      >
+                        <p>{{ t('rightPanel.noToolsExecuted') }}</p>
                       </div>
                     </div>
 
@@ -302,12 +413,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { Icon } from '@iconify/vue'
-import { fetchAgentExecutionDetail, refreshAgentExecutionDetail } from '@/api/agent-execution'
-import type { AgentExecutionRecordDetail } from '@/types/agent-execution-detail'
 import FileBrowser from '@/components/file-browser/index.vue'
+import ExecutionController from '@/components/sidebar/ExecutionController.vue'
+import JsonEditorV2 from '@/components/sidebar/JsonEditorV2.vue'
+import { useAvailableToolsSingleton } from '@/composables/useAvailableTools'
+import { usePlanTemplateConfigSingleton } from '@/composables/usePlanTemplateConfig'
+import { usePlanTemplateImport } from '@/composables/usePlanTemplateImport'
+import { useRightPanelSingleton } from '@/composables/useRightPanel'
+import { useToast } from '@/plugins/useToast'
+import { sidebarStore } from '@/stores/sidebar'
+import { templateStore } from '@/stores/templateStore'
+import { Icon } from '@iconify/vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 // Define props interface
 interface Props {
@@ -317,33 +435,52 @@ interface Props {
 
 const props = defineProps<Props>()
 
-// Define selected step interface
-interface SelectedStep {
-  stepId: string
-  title: string
-  description: string
-  agentExecution?: AgentExecutionRecordDetail
-  completed: boolean
-  current: boolean
+const { t } = useI18n()
+const toast = useToast()
+
+// Copy to clipboard function
+const copyToClipboard = async (text: string | null | undefined) => {
+  if (!text) {
+    toast.error(t('rightPanel.copyFailed') || 'Failed to copy')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success(t('rightPanel.copySuccess') || 'Copied to clipboard')
+  } catch (error) {
+    console.error('Failed to copy to clipboard:', error)
+    toast.error(t('rightPanel.copyFailed') || 'Failed to copy')
+  }
 }
 
-const { t } = useI18n()
+// Use singleton composable for right panel state
+const rightPanel = useRightPanelSingleton()
+
+// Template config for Func-Agent Config tab
+const templateConfig = usePlanTemplateConfigSingleton()
+
+// Available tools management
+const availableToolsStore = useAvailableToolsSingleton()
+
+// Plan template import composable
+const { handleImport: handleImportPlanTemplate } = usePlanTemplateImport()
 
 // DOM element reference
 const scrollContainer = ref<HTMLElement>()
 
-// Local state
-const selectedStep = ref<SelectedStep | null>()
-const activeTab = ref<'details' | 'files'>('details')
-
-// Keep track of the last executed plan for file browser
-const lastExecutedPlanId = ref<string | null>(localStorage.getItem('jmanus-last-plan-id'))
-const hasExecutedAnyPlan = ref(localStorage.getItem('jmanus-has-executed-plan') === 'true')
-
-// Scroll-related state
+// Scroll-related state (component-specific, not in composable)
 const showScrollToBottomButton = ref(false)
 const isNearBottom = ref(true)
 const shouldAutoScrollToBottom = ref(true)
+
+// Computed properties using composable state
+const selectedStep = computed(() => rightPanel.selectedStep.value)
+const activeTab = computed({
+  get: () => rightPanel.activeTab.value,
+  set: (value: 'config' | 'details' | 'files') => rightPanel.setActiveTab(value),
+})
+const fileBrowserPlanId = computed(() => rightPanel.fileBrowserPlanId.value)
+const shouldShowNoTaskMessage = computed(() => rightPanel.shouldShowNoTaskMessage.value)
 
 const stepStatusText = computed(() => {
   if (!selectedStep.value) return ''
@@ -352,112 +489,98 @@ const stepStatusText = computed(() => {
   return t('rightPanel.status.waiting')
 })
 
-// Computed property to determine which planId to show in file browser
-const fileBrowserPlanId = computed(() => {
-  // If there's a current plan, use it
-  if (props.currentRootPlanId) {
-    return props.currentRootPlanId
-  }
-  // Otherwise, use the last executed plan if any
-  return lastExecutedPlanId.value
-})
+// Actions - Template creation and import
+/**
+ * Handle creating a new Func-Agent plan
+ */
+const handleCreateNewPlan = async () => {
+  try {
+    // Use default plan type or get from templateConfig
+    const planType = templateConfig.getPlanType() || 'dynamic_agent'
+    await templateStore.createNewTemplate(planType)
 
-// Computed property to determine if we should show the "no task" message
-const shouldShowNoTaskMessage = computed(() => {
-  return !fileBrowserPlanId.value && !hasExecutedAnyPlan.value
-})
+    // Load template config for new template
+    const newTemplate = templateConfig.selectedTemplate.value
+    if (newTemplate) {
+      templateConfig.reset()
+      templateConfig.setPlanType(newTemplate.planType || 'dynamic_agent')
+      if (newTemplate.planTemplateId) {
+        templateConfig.setPlanTemplateId(newTemplate.planTemplateId)
+      }
+      templateConfig.setTitle(newTemplate.title || '')
+    }
+
+    // Reload available tools to ensure fresh tool list
+    console.log('[RightPanel] 🔄 Reloading available tools for new template')
+    await availableToolsStore.loadAvailableTools()
+  } catch (error) {
+    console.error('[RightPanel] Failed to create new plan:', error)
+    const message = error instanceof Error ? error.message : t('rightPanel.createPlanFailed')
+    toast.error(message)
+  }
+}
+
+/**
+ * Handle importing an existing plan
+ */
+const handleImportExistingPlan = async (event: Event) => {
+  await handleImportPlanTemplate(event, {
+    onSuccess: async result => {
+      const successMsg = t('rightPanel.importSuccess', {
+        total: result.total,
+        success: result.successCount,
+        failed: result.failureCount,
+      })
+      toast.success(successMsg)
+    },
+    onError: error => {
+      const errorMessage = error instanceof Error ? error.message : t('rightPanel.importFailed')
+      toast.error(errorMessage)
+    },
+    onReload: async () => {
+      // Reload template list
+      await templateStore.loadPlanTemplateList()
+      // Reload available tools to show newly imported tools and dependencies
+      await availableToolsStore.loadAvailableTools()
+    },
+    onSingleTemplateImported: async template => {
+      // If only one template was imported, select it
+      if (template.planTemplateId) {
+        templateConfig.setPlanTemplateId(template.planTemplateId)
+        await templateConfig.load(template.planTemplateId)
+      }
+    },
+  })
+}
 
 // Actions - Step selection and refresh control
 
 /**
  * Handle step selection by stepId
+ * Wrapper around composable method with scroll management
  * @param stepId - The step ID to display
  */
-const handleStepSelected = async (stepId: string) => {
-  console.log('[RightPanel] Step selected:', { stepId })
+const handleStepSelected = async (stepId: string): Promise<void> => {
+  await rightPanel.handleStepSelected(stepId)
 
-  if (!stepId) {
-    console.warn('[RightPanel] No stepId provided')
-    selectedStep.value = null
-    return
-  }
+  // Delay scroll state check to ensure DOM is updated
+  setTimeout(() => {
+    checkScrollState()
+  }, 100)
 
-  try {
-    // Fetch agent execution detail from API
-    const agentExecutionDetail = await fetchAgentExecutionDetail(stepId)
-
-    if (!agentExecutionDetail) {
-      console.warn('[RightPanel] Agent execution detail not found for stepId:', stepId)
-      selectedStep.value = null
-      return
-    }
-
-    // Create step data object
-    const stepData: SelectedStep = {
-      stepId: stepId,
-      title: agentExecutionDetail.agentName ?? `Step ${stepId}`,
-      description: agentExecutionDetail.agentDescription ?? '',
-      agentExecution: agentExecutionDetail,
-      completed: agentExecutionDetail.status === 'FINISHED',
-      current: agentExecutionDetail.status === 'RUNNING',
-    }
-
-    selectedStep.value = stepData
-    console.log('[RightPanel] Step details updated:', stepData)
-    console.log('[RightPanel] activeTab:', activeTab.value)
-    console.log('[RightPanel] selectedStep.value:', selectedStep.value)
-    console.log('[RightPanel] agentExecution:', selectedStep.value.agentExecution)
-    console.log('[RightPanel] thinkActSteps:', selectedStep.value.agentExecution?.thinkActSteps)
-    console.log(
-      '[RightPanel] thinkActSteps length:',
-      selectedStep.value.agentExecution?.thinkActSteps?.length
-    )
-
-    // Force reactivity update
-    await nextTick()
-    console.log('[RightPanel] After nextTick - selectedStep:', selectedStep.value)
-
-    // Delay scroll state check to ensure DOM is updated
-    setTimeout(() => {
-      checkScrollState()
-    }, 100)
-
-    // Auto-scroll to latest content if previously at bottom
-    autoScrollToBottomIfNeeded()
-  } catch (error) {
-    console.error('[RightPanel] Error fetching step details:', error)
-    selectedStep.value = null
-  }
+  // Auto-scroll to latest content if previously at bottom
+  autoScrollToBottomIfNeeded()
 }
 
 /**
  * Refresh the currently selected step
+ * Wrapper around composable method with scroll management
  */
-const refreshCurrentStep = async () => {
-  if (!selectedStep.value?.stepId) {
-    console.warn('[RightPanel] No step selected for refresh')
-    return
-  }
+const refreshCurrentStep = async (): Promise<void> => {
+  await rightPanel.refreshCurrentStep()
 
-  console.log('[RightPanel] Refreshing current step:', selectedStep.value.stepId)
-
-  try {
-    const agentExecutionDetail = await refreshAgentExecutionDetail(selectedStep.value.stepId)
-
-    if (agentExecutionDetail) {
-      // Update the existing step data
-      selectedStep.value.agentExecution = agentExecutionDetail
-      selectedStep.value.completed = agentExecutionDetail.status === 'FINISHED'
-      selectedStep.value.current = agentExecutionDetail.status === 'RUNNING'
-
-      console.log('[RightPanel] Step refreshed successfully')
-
-      // Auto-scroll to latest content if previously at bottom
-      autoScrollToBottomIfNeeded()
-    }
-  } catch (error) {
-    console.error('[RightPanel] Error refreshing step:', error)
-  }
+  // Auto-scroll to latest content if previously at bottom
+  autoScrollToBottomIfNeeded()
 }
 
 // Watch for selectedStepId prop changes
@@ -467,7 +590,7 @@ watch(
     if (newStepId) {
       await handleStepSelected(newStepId)
     } else {
-      selectedStep.value = null
+      rightPanel.clearSelectedStep()
     }
   },
   { immediate: true }
@@ -496,16 +619,6 @@ const checkScrollState = () => {
     // If user clearly scrolled up (more than 100px from bottom), stop auto-scrolling
     shouldAutoScrollToBottom.value = false
   }
-
-  console.log('[RightPanel] Scroll state check:', {
-    scrollTop,
-    scrollHeight,
-    clientHeight,
-    isAtBottom,
-    hasScrollableContent,
-    showButton: showScrollToBottomButton.value,
-    shouldAutoScroll: shouldAutoScrollToBottom.value,
-  })
 }
 
 const scrollToBottom = () => {
@@ -535,22 +648,11 @@ const autoScrollToBottomIfNeeded = () => {
 }
 
 // Actions - Utility functions
-const formatJson = (jsonData: unknown): string => {
-  if (jsonData === null || typeof jsonData === 'undefined' || jsonData === '') {
-    return 'N/A'
-  }
-  try {
-    const jsonObj = typeof jsonData === 'object' ? jsonData : JSON.parse(jsonData as string)
-    return JSON.stringify(jsonObj, null, 2)
-  } catch {
-    // If parsing fails, return string format directly (similar to _escapeHtml in right-sidebar.js)
-    return String(jsonData)
-  }
-}
+// Use formatJson from composable
+const formatJson = rightPanel.formatJson
 
 // Actions - Resource cleanup
 const cleanup = () => {
-  selectedStep.value = null
   shouldAutoScrollToBottom.value = true
 
   if (scrollContainer.value) {
@@ -589,30 +691,8 @@ const initScrollListener = () => {
   })
 }
 
-// Watch for currentRootPlanId changes to track execution history
-watch(
-  () => props.currentRootPlanId,
-  (newPlanId, oldPlanId) => {
-    if (newPlanId && newPlanId !== oldPlanId) {
-      // A new plan has started executing
-      lastExecutedPlanId.value = newPlanId
-      hasExecutedAnyPlan.value = true
-
-      // Persist to localStorage
-      localStorage.setItem('jmanus-last-plan-id', newPlanId)
-      localStorage.setItem('jmanus-has-executed-plan', 'true')
-
-      console.log('[RightPanel] New plan started:', newPlanId)
-    } else if (!newPlanId && oldPlanId) {
-      // Plan execution finished, but keep the lastExecutedPlanId for file browser
-      console.log(
-        '[RightPanel] Plan execution finished, keeping last plan:',
-        lastExecutedPlanId.value
-      )
-    }
-  },
-  { immediate: true }
-)
+// Note: currentRootPlanId is now reactively derived from useMessageDialog
+// No need to watch props.currentRootPlanId anymore
 
 // Lifecycle - initialization on mount
 onMounted(() => {
@@ -632,22 +712,11 @@ onUnmounted(() => {
 /**
  * Update displayed plan progress
  * This method is called when a plan is updated to refresh the display
+ * Wrapper around composable method
  * @param rootPlanId - The root plan ID to update
  */
-const updateDisplayedPlanProgress = (rootPlanId: string) => {
-  console.log('[RightPanel] updateDisplayedPlanProgress called with rootPlanId:', rootPlanId)
-
-  // Update the last executed plan ID for file browser
-  if (rootPlanId) {
-    lastExecutedPlanId.value = rootPlanId
-    hasExecutedAnyPlan.value = true
-
-    // Persist to localStorage
-    localStorage.setItem('jmanus-last-plan-id', rootPlanId)
-    localStorage.setItem('jmanus-has-executed-plan', 'true')
-
-    console.log('[RightPanel] Plan progress updated:', rootPlanId)
-  }
+const updateDisplayedPlanProgress = (rootPlanId: string): void => {
+  rightPanel.updateDisplayedPlanProgress(rootPlanId)
 }
 
 // Expose methods to parent component - only keep necessary interfaces
@@ -668,7 +737,7 @@ defineExpose({
 }
 
 .preview-header {
-  padding: 20px 24px;
+  padding: 8px 12px;
   border-bottom: 1px solid #1a1a1a;
   background: rgba(255, 255, 255, 0.02);
 
@@ -1059,6 +1128,25 @@ defineExpose({
 
   .think-content,
   .action-content {
+    .tool-execution-item {
+      margin-bottom: 20px;
+      padding: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+    }
+
+    .no-tools {
+      padding: 12px;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 13px;
+    }
+
     .input,
     .output,
     .tool-info {
@@ -1068,17 +1156,56 @@ defineExpose({
         margin-bottom: 0;
       }
 
+      .label-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 4px;
+      }
+
       .label {
-        display: block;
         font-weight: 600;
         color: #888888;
-        margin-bottom: 4px;
         font-size: 12px;
+      }
+
+      .label-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .copy-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        padding: 4px 6px;
+        color: rgba(255, 255, 255, 0.7);
+        cursor: pointer;
+        transition: all 0.2s;
+        font-size: 12px;
+
+        &:hover {
+          background: rgba(0, 0, 0, 0.5);
+          border-color: rgba(255, 255, 255, 0.2);
+          color: rgba(255, 255, 255, 0.9);
+        }
+
+        &:active {
+          transform: scale(0.95);
+        }
       }
 
       .value {
         color: #cccccc;
         font-size: 14px;
+      }
+
+      .pre-container {
+        display: block;
       }
 
       pre {
@@ -1094,6 +1221,16 @@ defineExpose({
         line-height: 1.4;
         max-height: 200px;
         overflow-y: auto;
+      }
+
+      .char-count-badge {
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.7);
+        font-weight: 500;
       }
     }
   }
@@ -1307,7 +1444,7 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 7px 16px;
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1340,5 +1477,135 @@ defineExpose({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Config Tab Styles */
+.config-tab-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.config-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px;
+  gap: 16px;
+}
+
+.template-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+
+  .template-info {
+    flex: 1;
+    min-width: 0;
+
+    h3 {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .template-id {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+  }
+
+  .back-to-list-btn {
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+  }
+}
+
+.no-template-selected {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #666666;
+  padding: 40px 20px;
+
+  .action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    max-width: 400px;
+  }
+
+  .new-task-btn {
+    width: 100%;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+
+    &:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+  }
+
+  .import-description {
+    margin-top: 16px;
+    padding: 0 16px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.7);
+    text-align: center;
+    max-width: 400px;
+
+    .prompt-library-link {
+      color: #667eea;
+      text-decoration: none;
+      transition: color 0.2s ease;
+
+      &:hover {
+        color: #764ba2;
+        text-decoration: underline;
+      }
+    }
+  }
 }
 </style>

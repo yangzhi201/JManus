@@ -30,18 +30,45 @@
         <!-- Show parameter fields only if there are parameters -->
         <div v-if="parameterRequirements.hasParameters" class="parameter-fields">
           <div
-            v-for="param in parameterRequirements.parameters"
+            v-for="(param, index) in parameterRequirements.parameters"
             :key="param"
             class="parameter-field"
           >
-            <label class="parameter-label">
-              {{ param }}
-              <span class="required">*</span>
-            </label>
+            <div class="parameter-label-row">
+              <label class="parameter-label">
+                {{ param }}
+                <span class="required">*</span>
+              </label>
+              <!-- Unified parameter history navigation - only show on first parameter -->
+              <div v-if="index === 0 && hasParameterHistory()" class="parameter-history-navigation">
+                <div class="history-navigation-controls">
+                  <button
+                    type="button"
+                    class="history-btn history-btn-up"
+                    :title="t('sidebar.historyUp')"
+                    :disabled="getToolHistoryIndex() >= getHistoryCount() - 1"
+                    @click="navigateParameterSetHistory('up')"
+                  >
+                    <Icon icon="carbon:chevron-up" width="12" />
+                  </button>
+                  <button
+                    type="button"
+                    class="history-btn history-btn-down"
+                    :title="t('sidebar.historyDown')"
+                    @click="navigateParameterSetHistory('down')"
+                  >
+                    <Icon icon="carbon:chevron-down" width="12" />
+                  </button>
+                </div>
+              </div>
+            </div>
             <input
               v-model="parameterValues[param]"
               class="parameter-input"
-              :class="{ error: parameterErrors[param] }"
+              :class="{
+                error: parameterErrors[param],
+                'viewing-history': getToolHistoryIndex() >= 0,
+              }"
               :placeholder="t('sidebar.enterValueFor', { param })"
               @input="updateParameterValue(param, ($event.target as HTMLInputElement).value)"
               required
@@ -52,13 +79,13 @@
           </div>
         </div>
 
-        <!-- Validation status message -->
+        <!-- Validation status message - only show after user attempts to execute -->
         <div
           v-if="
+            hasAttemptedExecute &&
             parameterRequirements.hasParameters &&
             !canExecute &&
-            !props.isExecuting &&
-            !props.isGenerating
+            !props.isExecuting
           "
           class="validation-message"
         >
@@ -70,7 +97,7 @@
       <!-- File Upload Component -->
       <FileUploadComponent
         ref="fileUploadRef"
-        :disabled="props.isExecuting || props.isGenerating"
+        :disabled="props.isExecuting"
         @files-uploaded="handleFilesUploaded"
         @files-removed="handleFilesRemoved"
         @upload-key-changed="handleUploadKeyChanged"
@@ -79,22 +106,33 @@
         @upload-error="handleUploadError"
       />
 
+      <!-- Toggle button: Execute Plan / Stop Task -->
       <button
         class="btn btn-primary execute-btn"
-        @click="handleExecutePlan"
-        :disabled="!canExecute"
+        :class="{ 'stop-button': isPlanRunning }"
+        @click="isPlanRunning ? handleStop() : handleExecutePlan()"
+        :disabled="isPlanRunning ? isStopping : !canExecute"
+        :title="isPlanRunning ? t('sidebar.stopTask') : t('sidebar.executePlan')"
       >
+        <Icon v-if="isPlanRunning" icon="carbon:stop-filled" width="16" />
         <Icon
+          v-else
           :icon="props.isExecuting ? 'carbon:circle-dash' : 'carbon:play'"
           width="16"
           :class="{ spinning: props.isExecuting }"
         />
-        {{ props.isExecuting ? t('sidebar.executing') : t('sidebar.executePlan') }}
+        {{
+          isPlanRunning
+            ? t('sidebar.stopTask')
+            : props.isExecuting
+              ? t('sidebar.executing')
+              : t('sidebar.executePlan')
+        }}
       </button>
       <button
         class="btn publish-mcp-btn"
         @click="handlePublishMcpService"
-        :disabled="!currentPlanTemplateId"
+        :disabled="!templateConfig.currentPlanTemplateId.value"
         v-if="showPublishButton"
       >
         <Icon icon="carbon:application" width="16" />
@@ -102,7 +140,10 @@
       </button>
 
       <!-- Internal Call wrapper - only show when enableInternalToolcall is true -->
-      <div v-if="toolInfo?.enableInternalToolcall" class="call-example-wrapper">
+      <div
+        v-if="templateConfig.selectedTemplate.value?.toolConfig?.enableInternalToolcall"
+        class="call-example-wrapper"
+      >
         <div class="call-example-header">
           <h4 class="call-example-title">{{ t('sidebar.internalCall') }}</h4>
           <p class="call-example-description">{{ t('sidebar.internalCallDescription') }}</p>
@@ -111,10 +152,16 @@
           <div class="call-info">
             <div class="call-method">{{ t('sidebar.internalMethodCall') }}</div>
             <div class="call-endpoint">
-              {{ t('sidebar.toolName') }}: {{ toolInfo?.toolName || currentPlanTemplateId }}
+              {{ t('sidebar.toolName') }}:
+              {{
+                templateConfig.selectedTemplate.value?.title ||
+                templateConfig.currentPlanTemplateId.value ||
+                ''
+              }}
             </div>
-            <div v-if="toolInfo?.serviceGroup" class="call-endpoint">
-              {{ t('sidebar.serviceGroup') }}: {{ toolInfo.serviceGroup }}
+            <div v-if="templateConfig.selectedTemplate.value?.serviceGroup" class="call-endpoint">
+              {{ t('sidebar.serviceGroup') }}:
+              {{ templateConfig.selectedTemplate.value.serviceGroup }}
             </div>
             <div class="call-description">{{ t('sidebar.internalCallUsage') }}</div>
             <div class="call-example">
@@ -126,7 +173,10 @@
       </div>
 
       <!-- HTTP API URLs wrapper with tabs - only show when enableHttpService is true -->
-      <div v-if="toolInfo?.enableHttpService" class="call-example-wrapper">
+      <div
+        v-if="templateConfig.selectedTemplate.value?.toolConfig?.enableHttpService"
+        class="call-example-wrapper"
+      >
         <div class="call-example-header">
           <h4 class="call-example-title">{{ t('sidebar.httpCallExample') }}</h4>
           <p class="call-example-description">{{ t('sidebar.httpCallDescription') }}</p>
@@ -164,25 +214,6 @@
           </div>
         </div>
       </div>
-
-      <!-- MCP Call wrapper - only show when enableMcpService is true -->
-      <div v-if="toolInfo?.enableMcpService" class="call-example-wrapper">
-        <div class="call-example-header">
-          <h4 class="call-example-title">{{ t('sidebar.mcpCall') }}</h4>
-          <p class="call-example-description">{{ t('sidebar.mcpCallDescription') }}</p>
-        </div>
-        <div class="mcp-call-wrapper">
-          <div class="call-info">
-            <div class="call-method">{{ t('sidebar.mcpServiceCall') }}</div>
-            <div class="call-endpoint">{{ t('sidebar.mcpEndpoint') }}: /mcp/execute</div>
-            <div class="call-description">{{ t('sidebar.mcpCallUsage') }}</div>
-            <div class="call-example">
-              <strong>{{ t('sidebar.usage') }}:</strong>
-              <pre class="example-code">{{ t('sidebar.mcpCallExample') }}</pre>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -192,64 +223,67 @@
     @save="handleSaveAndExecute"
     @continue="handleContinueExecution"
   />
+
+  <!-- Publish Service Modal -->
+  <PublishServiceModal v-model="showPublishMcpModal" />
 </template>
 
 <script setup lang="ts">
-import type { CoordinatorToolVO } from '@/api/coordinator-tool-api-service'
 import { FileInfo } from '@/api/file-upload-api-service'
 import {
   PlanParameterApiService,
   type ParameterRequirements,
 } from '@/api/plan-parameter-api-service'
 import FileUploadComponent from '@/components/file-upload/FileUploadComponent.vue'
+import PublishServiceModal from '@/components/publish-service-modal/PublishServiceModal.vue'
 import SaveConfirmationDialog from '@/components/sidebar/SaveConfirmationDialog.vue'
-import { sidebarStore } from '@/stores/sidebar'
-import type { PlanExecutionRequestPayload } from '@/types/plan-execution'
-import { Icon } from '@iconify/vue'
-import { computed, onMounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
+import { useFileUploadSingleton } from '@/composables/useFileUpload'
+import { useMessageDialogSingleton } from '@/composables/useMessageDialog'
+import { usePlanExecutionSingleton } from '@/composables/usePlanExecution'
+import { usePlanTemplateConfigSingleton } from '@/composables/usePlanTemplateConfig'
+import { useTaskStop } from '@/composables/useTaskStop'
 import { useToast } from '@/plugins/useToast'
+import { parameterHistoryStore } from '@/stores/parameterHistory'
+import { templateStore } from '@/stores/templateStore'
+import { useTaskStore } from '@/stores/task'
+import type { PlanData, PlanExecutionRequestPayload } from '@/types/plan-execution'
+import { Icon } from '@iconify/vue'
+import { computed, onMounted, ref, watch, watchEffect } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 const toast = useToast()
 
+// Template config singleton
+const templateConfig = usePlanTemplateConfigSingleton()
+
+// Message dialog singleton for executing plans
+const messageDialog = useMessageDialogSingleton()
+
+// Plan execution singleton to track execution state
+const planExecution = usePlanExecutionSingleton()
+
+// Task store and stop functionality
+const taskStore = useTaskStore()
+const { stopTask, isStopping } = useTaskStop()
+
+// Shared file upload state
+const fileUpload = useFileUploadSingleton()
+
 // Props
 interface Props {
-  currentPlanTemplateId?: string
   isExecuting?: boolean
-  isGenerating?: boolean
-  showPublishButton?: boolean
-  toolInfo?: CoordinatorToolVO
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  currentPlanTemplateId: '',
   isExecuting: false,
-  isGenerating: false,
-  showPublishButton: true,
-  toolInfo: () => ({
-    toolName: '',
-    toolDescription: '',
-    planTemplateId: '',
-    inputSchema: '[]',
-    enableHttpService: false,
-    enableMcpService: false,
-    enableInternalToolcall: false,
-    serviceGroup: '',
-  }),
 })
 
-// Emits
-const emit = defineEmits<{
-  executePlan: [payload: PlanExecutionRequestPayload]
-  publishMcpService: []
-  clearParams: []
-  updateExecutionParams: [params: string]
-  saveBeforeExecute: []
-}>()
+// No emits needed - we handle execution directly
 
 // Local state
 const executionParams = ref('')
+const showPublishMcpModal = ref(false)
 const parameterRequirements = ref<ParameterRequirements>({
   parameters: [],
   hasParameters: false,
@@ -257,86 +291,85 @@ const parameterRequirements = ref<ParameterRequirements>({
 })
 const parameterValues = ref<Record<string, string>>({})
 const isLoadingParameters = ref(false)
-const activeTab = ref('get-sync')
+const activeTab = ref('post-async')
 const parameterErrors = ref<Record<string, string>>({})
 const isValidationError = ref(false)
 const isExecutingPlan = ref(false) // Flag to prevent parameter reload during execution
+const lastPlanId = ref<string | null>(null) // Track last returned plan ID
+const lastRefreshTimestamp = ref<number>(0) // Track last refresh time for debouncing
+const REFRESH_DEBOUNCE_MS = 500 // Debounce time for parameter refresh
+const hasAttemptedExecute = ref(false) // Track if user has attempted to execute (for validation message)
 
-// File upload state
+// Computed property: whether to show publish MCP service button
+const showPublishButton = computed(() => {
+  return templateConfig.getCoordinatorToolConfig()
+})
+
+// File upload state - use shared state
 const fileUploadRef = ref<InstanceType<typeof FileUploadComponent>>()
-const uploadedFiles = ref<string[]>([])
-const uploadKey = ref<string | null>(null)
+// Use shared state from composable
+const uploadedFiles = computed(() => fileUpload.getUploadedFileNames())
+const uploadKey = computed(() => fileUpload.uploadKey.value)
 
 // Save confirmation dialog state
 const showSaveDialog = ref(false)
 const pendingExecutionPayload = ref<PlanExecutionRequestPayload | null>(null)
 
-// API tabs configuration
-const apiTabs = ref([
-  {
-    id: 'get-sync',
-    label: 'GET + Sync',
-    method: 'GET',
-    endpoint: '/api/executor/executeByToolNameSync/{toolName}',
-    description: 'Synchronous GET request - returns execution result immediately',
-    example: `GET /api/executor/executeByToolNameSync/my-tool?allParams={"rawParam":"test"}
-Response: {
-  "status": "completed",
-  "result": "Execution result here"
-}`,
-  },
-  {
-    id: 'post-sync',
-    label: 'POST + Sync',
-    method: 'POST',
-    endpoint: '/api/executor/executeByToolNameSync',
-    description: 'Synchronous POST request - returns execution result immediately',
-    example: `POST /api/executor/executeByToolNameSync
+// API tabs configuration - dynamically generated from template and parameters
+const apiTabs = computed(() => {
+  // Get actual values from selected template
+  const toolName = templateConfig.selectedTemplate.value?.title || 'my-tool'
+  const serviceGroup = templateConfig.selectedTemplate.value?.serviceGroup || 'research'
+  const planTemplateId = templateConfig.selectedTemplate.value?.planTemplateId || 'template-456'
+
+  // Generate replacementParams from actual parameter requirements
+  const replacementParams: Record<string, string> = {}
+  if (
+    parameterRequirements.value.hasParameters &&
+    parameterRequirements.value.parameters.length > 0
+  ) {
+    parameterRequirements.value.parameters.forEach(param => {
+      // Use actual value if available, otherwise use placeholder
+      replacementParams[param] = parameterValues.value[param] || 'test'
+    })
+  } else {
+    // Default example when no parameters
+    replacementParams['rawParam'] = 'test'
+  }
+
+  // Use actual planId or i18n placeholder
+  const planId = lastPlanId.value || t('sidebar.defaultPlanId')
+  const detailsPlanId = lastPlanId.value || t('sidebar.defaultPlanIdDetails')
+
+  return [
+    {
+      id: 'post-async',
+      label: 'POST + Async',
+      method: 'POST',
+      endpoint: '/api/executor/executeByToolNameAsync',
+      description: 'Asynchronous POST request - returns task ID, check status separately',
+      example: `POST /api/executor/executeByToolNameAsync
 Content-Type: application/json
 
 {
-  "toolName": "my-tool",
-  "replacementParams": {
-    "rawParam": "test"
-  },
+  "toolName": "${toolName}",
+  "serviceGroup": "${serviceGroup}",
+  "replacementParams": ${JSON.stringify(replacementParams, null, 2)},
   "uploadedFiles": []
 }
 
 Response: {
-  "status": "completed",
-  "result": "Execution result here"
-}`,
-  },
-  {
-    id: 'post-async',
-    label: 'POST + Async',
-    method: 'POST',
-    endpoint: '/api/executor/executeByToolNameAsync',
-    description: 'Asynchronous POST request - returns task ID, check status separately',
-    example: `POST /api/executor/executeByToolNameAsync
-Content-Type: application/json
-
-{
-  "toolName": "my-tool",
-  "replacementParams": {
-    "rawParam": "test"
-  },
-  "uploadedFiles": []
-}
-
-Response: {
-  "planId": "plan-123",
+  "planId": "${planId}",
   "status": "processing",
   "message": "Task submitted, processing",
-  "memoryId": "ABC12345",
-  "toolName": "my-tool",
-  "planTemplateId": "template-456"
+  "toolName": "${toolName}",
+  "planTemplateId": "${planTemplateId}"
 }
 
 # Check execution status and get detailed results:
-GET /api/executor/details/{planId}
+GET /api/executor/details/${detailsPlanId}
 Response: {
-  "currentPlanId": "plan-123",
+  "currentPlanId": "${planId}",
   "title": "Plan Title",
   "status": "completed",
   "summary": "Execution completed successfully",
@@ -358,15 +391,39 @@ Response: {
     ]
   }
 }`,
-  },
-])
+    },
+    {
+      id: 'post-sync',
+      label: 'POST + Sync',
+      method: 'POST',
+      endpoint: '/api/executor/executeByToolNameSync',
+      description: 'Synchronous POST request - returns execution result immediately',
+      example: `POST /api/executor/executeByToolNameSync
+Content-Type: application/json
+
+{
+  "toolName": "${toolName}",
+  "serviceGroup": "${serviceGroup}",
+  "replacementParams": ${JSON.stringify(replacementParams, null, 2)},
+  "uploadedFiles": []
+}
+
+Response: {
+  "status": "completed",
+  "result": "Execution result here"
+}`,
+    },
+  ]
+})
 
 // Computed properties
 const isAnyServiceEnabled = computed(() => {
+  const toolConfig = templateConfig.selectedTemplate.value?.toolConfig
   return (
-    props.toolInfo.enableInternalToolcall ??
-    props.toolInfo.enableHttpService ??
-    props.toolInfo.enableMcpService
+    toolConfig?.enableInternalToolcall ??
+    toolConfig?.enableHttpService ??
+    toolConfig?.enableInConversation ??
+    false
   )
 })
 
@@ -376,8 +433,40 @@ const buttonText = computed(() => {
     : t('sidebar.publishMcpService')
 })
 
+// Computed property for disabled state - same as InputArea.vue
+const isDisabled = computed(() => messageDialog.isLoading.value)
+
+// Check if a plan is currently running
+const isPlanRunning = computed(() => {
+  return (
+    taskStore.hasRunningTask() ||
+    planExecution.trackedPlanIds.value.size > 0 ||
+    isExecutingPlan.value
+  )
+})
+
 const canExecute = computed(() => {
-  if (props.isExecuting || props.isGenerating) {
+  // Disable if messageDialog is loading (same validation as InputArea)
+  if (isDisabled.value) {
+    return false
+  }
+
+  if (props.isExecuting) {
+    return false
+  }
+
+  // Disable if there's a plan execution in progress (prevents duplicate submissions)
+  if (isExecutingPlan.value) {
+    return false
+  }
+
+  // Also check if there are any tracked plans or running plans
+  const hasTrackedPlans = planExecution.trackedPlanIds.value.size > 0
+  const recordsArray = Array.from(planExecution.planExecutionRecords.entries())
+  const hasRunningPlansInRecords = recordsArray.some(
+    ([, record]) => record && !record.completed && record.status !== 'failed'
+  )
+  if (hasTrackedPlans || hasRunningPlansInRecords) {
     return false
   }
 
@@ -392,21 +481,25 @@ const canExecute = computed(() => {
   return true
 })
 
-// File upload event handlers
+// File upload event handlers - state is already updated in shared composable
 const handleFilesUploaded = (files: FileInfo[], key: string | null) => {
-  uploadedFiles.value = files.map(file => file.originalName)
-  uploadKey.value = key
-  console.log('[ExecutionController] Files uploaded:', files.length, 'uploadKey:', key)
+  console.log(
+    '[ExecutionController] Files uploaded event received:',
+    files.length,
+    'uploadKey:',
+    key
+  )
+  // State is already updated in shared composable
 }
 
 const handleFilesRemoved = (files: FileInfo[]) => {
-  uploadedFiles.value = files.map(file => file.originalName)
-  console.log('[ExecutionController] Files removed, remaining:', files.length)
+  console.log('[ExecutionController] Files removed event received, remaining:', files.length)
+  // State is already updated in shared composable
 }
 
 const handleUploadKeyChanged = (key: string | null) => {
-  uploadKey.value = key
   console.log('[ExecutionController] Upload key changed:', key)
+  // State is already updated in shared composable
 }
 
 const handleUploadStarted = () => {
@@ -422,17 +515,33 @@ const handleUploadError = (error: unknown) => {
 }
 
 // Methods
-const handleExecutePlan = () => {
+const handleExecutePlan = async () => {
   console.log('[ExecutionController] 🚀 Execute button clicked')
 
+  // Mark that user has attempted to execute (for validation message)
+  hasAttemptedExecute.value = true
+
+  // Check if there's already an execution in progress
+  if (props.isExecuting || messageDialog.isLoading.value || isExecutingPlan.value) {
+    console.log(
+      '[ExecutionController] ⏸️ Execution already in progress. isExecuting: {}, messageDialog.isLoading: {}, isExecutingPlan: {}',
+      props.isExecuting,
+      messageDialog.isLoading.value,
+      isExecutingPlan.value
+    )
+    toast.error(t('sidebar.executionInProgress'))
+    return
+  }
+
   // Check if task requirements have been modified
-  if (sidebarStore.hasTaskRequirementModified) {
+  if (templateStore.hasTaskRequirementModified) {
     console.log(
       '[ExecutionController] ⚠️ Task requirements modified, showing save confirmation dialog'
     )
     // Prepare payload but don't execute yet
     if (!validateParameters()) {
       console.log('[ExecutionController] ❌ Parameter validation failed:', parameterErrors.value)
+      // Keep hasAttemptedExecute as true to show validation message
       return
     }
 
@@ -446,7 +555,6 @@ const handleExecutePlan = () => {
       planData: {
         title: '',
         steps: [],
-        directResponse: false,
       }, // Will be set by the parent component
       params: undefined, // Will be set by the parent component
       replacementParams,
@@ -459,11 +567,19 @@ const handleExecutePlan = () => {
   }
 
   // Continue with normal execution if no modifications
-  proceedWithExecution()
+  await proceedWithExecution()
 }
 
-const proceedWithExecution = () => {
-  // Set execution flag to prevent parameter reload
+const proceedWithExecution = async () => {
+  // Double-check execution state before proceeding (defense in depth)
+  if (props.isExecuting || messageDialog.isLoading.value || isExecutingPlan.value) {
+    console.log(
+      '[ExecutionController] ⏸️ Execution already in progress in proceedWithExecution. Skipping.'
+    )
+    return
+  }
+
+  // Set execution flag to prevent parameter reload and concurrent execution
   isExecutingPlan.value = true
   console.log('[ExecutionController] 🔒 Set isExecutingPlan to true')
 
@@ -471,75 +587,219 @@ const proceedWithExecution = () => {
   if (!validateParameters()) {
     console.log('[ExecutionController] ❌ Parameter validation failed:', parameterErrors.value)
     isExecutingPlan.value = false // Reset flag on validation failure
+    // Keep hasAttemptedExecute as true to show validation message
     return
   }
 
-  // Pass replacement parameters if available
-  const replacementParams =
-    parameterRequirements.value.hasParameters && Object.keys(parameterValues.value).length > 0
-      ? parameterValues.value
-      : undefined
+  // Reset validation attempt flag when validation passes and execution starts
+  hasAttemptedExecute.value = false
 
-  console.log('[ExecutionController] 🔄 Replacement params:', replacementParams)
+  // Save current parameter set to history before execution
+  saveParameterSetToHistory()
 
-  const payload: PlanExecutionRequestPayload = {
-    title: '', // Will be set by the parent component
-    planData: {
-      title: '',
-      steps: [],
-      directResponse: false,
-    }, // Will be set by the parent component
-    params: undefined, // Will be set by the parent component
-    replacementParams,
-    uploadedFiles: uploadedFiles.value,
-    uploadKey: uploadKey.value,
+  try {
+    // Get plan data from templateConfig
+    if (!templateConfig.selectedTemplate.value) {
+      console.log('[ExecutionController] ❌ No template selected, returning')
+      toast.error(t('sidebar.selectPlanFirst'))
+      isExecutingPlan.value = false
+      return
+    }
+
+    const config = templateConfig.getConfig()
+
+    // Convert PlanTemplateConfigVO to PlanData format
+    const planTemplateId =
+      templateConfig.selectedTemplate.value.planTemplateId || config.planTemplateId
+    const planData: PlanData = {
+      title: config.title || templateConfig.selectedTemplate.value.title || 'Execution Plan',
+      steps: (config.steps || []).map(step => ({
+        stepRequirement: step.stepRequirement || '',
+        agentName: step.agentName || '',
+        modelName: step.modelName || null,
+        selectedToolKeys: [],
+        terminateColumns: step.terminateColumns || '',
+        stepContent: '',
+      })),
+      ...(planTemplateId && { planTemplateId }),
+      ...(config.planType && { planType: config.planType }),
+    }
+
+    const title = templateConfig.selectedTemplate.value.title ?? config.title ?? 'Execution Plan'
+
+    // Extract toolName and serviceGroup from template for API execution
+    const toolName = templateConfig.selectedTemplate.value?.title || config.title || ''
+    const serviceGroup =
+      templateConfig.selectedTemplate.value?.serviceGroup || config.serviceGroup || undefined
+
+    // Validate toolName is present
+    if (!toolName || toolName.trim() === '') {
+      console.error('[ExecutionController] ❌ Tool name is required but not found')
+      toast.error(t('sidebar.toolNameRequired') || 'Tool name is required for execution')
+      isExecutingPlan.value = false
+      return
+    }
+
+    // Pass replacement parameters if available
+    const replacementParams =
+      parameterRequirements.value.hasParameters && Object.keys(parameterValues.value).length > 0
+        ? parameterValues.value
+        : undefined
+
+    console.log('[ExecutionController] 🔄 Replacement params:', replacementParams)
+    console.log('[ExecutionController] 📋 Prepared plan data:', JSON.stringify(planData, null, 2))
+    console.log('[ExecutionController] 🔧 Tool name:', toolName, 'Service group:', serviceGroup)
+
+    // Build final payload with plan data
+    const finalPayload: PlanExecutionRequestPayload = {
+      title,
+      planData,
+      params: undefined, // params are now handled via replacementParams
+      replacementParams,
+      uploadedFiles: uploadedFiles.value,
+      uploadKey: uploadKey.value,
+      toolName,
+      serviceGroup,
+    }
+
+    console.log(
+      '[ExecutionController] 📤 Executing plan with payload:',
+      JSON.stringify(finalPayload, null, 2)
+    )
+
+    // Execute plan directly via messageDialog
+    const result = await messageDialog.executePlan(finalPayload)
+
+    if (result.success) {
+      console.log('[ExecutionController] ✅ Plan execution started successfully:', result.planId)
+      // Track the returned planId for API examples
+      if (result.planId) {
+        lastPlanId.value = result.planId
+        console.log('[ExecutionController] 📝 Tracked planId for API examples:', lastPlanId.value)
+      }
+    } else {
+      console.error('[ExecutionController] ❌ Plan execution failed:', result.error)
+      toast.error(result.error || t('sidebar.executeFailed'))
+    }
+  } catch (error: unknown) {
+    console.error('[ExecutionController] ❌ Error executing plan:', error)
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    toast.error(t('sidebar.executeFailed') + ': ' + message)
+    isExecutingPlan.value = false
+  } finally {
+    console.log('[ExecutionController] 🧹 Cleaning up after execution')
+    // Clear parameters after execution
+    clearExecutionParams()
+    console.log('[ExecutionController] ✅ Cleanup completed')
   }
-
-  console.log(
-    '[ExecutionController] 📤 Emitting executePlan with payload:',
-    JSON.stringify(payload, null, 2)
-  )
-  emit('executePlan', payload)
 }
 
 const handleSaveAndExecute = async () => {
   console.log('[ExecutionController] 💾 Save and execute requested')
   try {
-    // Emit save event to parent (Sidebar component)
-    // The parent will handle the save and then we can execute
-    emit('saveBeforeExecute')
+    // Save using templateConfig directly
+    if (!templateConfig.selectedTemplate.value) {
+      toast.error(t('sidebar.selectPlanFirst'))
+      return
+    }
+
+    // Validate config
+    const validation = templateConfig.validate()
+    if (!validation.isValid) {
+      toast.error(
+        'Invalid format, please correct and save.\nErrors: ' + validation.errors.join(', ')
+      )
+      return
+    }
+
+    const planTemplateId = templateConfig.selectedTemplate.value.planTemplateId
+    if (!planTemplateId) {
+      toast.error('Plan template ID is required')
+      return
+    }
+
+    // Save using templateConfig (this already calls PlanTemplateApiService.createOrUpdatePlanTemplateWithTool)
+    const success = await templateConfig.save()
+    if (!success) {
+      toast.error('Failed to save plan template')
+      return
+    }
+
+    // Update versions after save
+    const content = templateConfig.generateJsonString().trim()
+    templateConfig.updateVersionsAfterSave(content)
+
+    // Get actual version count after update
+    const versionCount = templateConfig.planVersions.value.length
+
+    // Reset modification flag after successful save
+    templateStore.hasTaskRequirementModified = false
+
+    // Wait for templateConfig.save() to complete and selectedTemplate to be updated
+    // The save() method already calls load() internally, so we need to wait a bit more
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    // Refresh parameter requirements after successful save
+    // Increase delay to ensure backend has processed the save and parameters are updated
+    await refreshParameterRequirements()
+
+    // Refresh sidebar template list to reflect the saved changes
+    await templateStore.loadPlanTemplateList()
+
+    // Note: templateConfig.save() already handles the save, so we just show success
+    toast.success(t('sidebar.saveSuccess', { message: 'Plan saved successfully', versionCount }))
+
     // Wait a bit for save to complete
     await new Promise(resolve => setTimeout(resolve, 500))
-    // Now proceed with execution
+    // Now proceed with execution - rebuild payload with current template config
     if (pendingExecutionPayload.value) {
-      console.log(
-        '[ExecutionController] 📤 Emitting executePlan after save:',
-        JSON.stringify(pendingExecutionPayload.value, null, 2)
-      )
-      emit('executePlan', pendingExecutionPayload.value)
+      // Rebuild payload with current template config
+      await proceedWithExecution()
       pendingExecutionPayload.value = null
     }
   } catch (error: unknown) {
     console.error('[ExecutionController] ❌ Failed to save before execute:', error)
     const message = error instanceof Error ? error.message : t('sidebar.saveFailed')
     toast.error(message)
+    throw error
   }
 }
 
-const handleContinueExecution = () => {
+const handleContinueExecution = async () => {
   console.log('[ExecutionController] ⏩ Continue without save requested')
   if (pendingExecutionPayload.value) {
-    console.log(
-      '[ExecutionController] 📤 Emitting executePlan without save:',
-      JSON.stringify(pendingExecutionPayload.value, null, 2)
-    )
-    emit('executePlan', pendingExecutionPayload.value)
+    // Rebuild payload with current template config
+    await proceedWithExecution()
     pendingExecutionPayload.value = null
   }
 }
 
 const handlePublishMcpService = () => {
-  emit('publishMcpService')
+  console.log('[ExecutionController] Publish MCP service button clicked')
+  console.log(
+    '[ExecutionController] currentPlanTemplateId:',
+    templateConfig.currentPlanTemplateId.value
+  )
+
+  if (!templateConfig.currentPlanTemplateId.value) {
+    console.log('[ExecutionController] No plan template selected, showing warning')
+    toast.error(t('mcpService.selectPlanTemplateFirst'))
+    return
+  }
+
+  showPublishMcpModal.value = true
+}
+
+const handleStop = async () => {
+  console.log('[ExecutionController] Stop button clicked')
+  const success = await stopTask()
+  if (success) {
+    console.log('[ExecutionController] Task stopped successfully')
+    toast.success(t('input.stop') || 'Stopped')
+  } else {
+    console.error('[ExecutionController] Failed to stop task')
+    toast.error(t('sidebar.executeFailed') || 'Failed to stop task')
+  }
 }
 
 const clearExecutionParams = () => {
@@ -548,26 +808,87 @@ const clearExecutionParams = () => {
   // Clear parameter values as well
   parameterValues.value = {}
 
-  // Reset execution flag after clearing
-  isExecutingPlan.value = false
-  console.log('[ExecutionController] 🔓 Reset isExecutingPlan to false')
+  // Note: isExecutingPlan is NOT reset here - it will be reset when the plan execution completes
+  // This prevents concurrent executions while a plan is still running
 
   console.log('[ExecutionController] ✅ After clear - parameterValues cleared')
-  emit('clearParams')
+  // Execution params are now managed internally, no need to emit
+}
+
+// Helper function to compare parameter lists
+const areParameterListsEqual = (params1: string[], params2: string[]): boolean => {
+  if (params1.length !== params2.length) {
+    return false
+  }
+  const sorted1 = [...params1].sort()
+  const sorted2 = [...params2].sort()
+  return sorted1.every((param, index) => param === sorted2[index])
+}
+
+// Refresh parameter requirements (called after save)
+const refreshParameterRequirements = async () => {
+  // Check if we should skip refresh due to debouncing
+  const now = Date.now()
+  if (now - lastRefreshTimestamp.value < REFRESH_DEBOUNCE_MS) {
+    console.log(
+      '[ExecutionController] ⏸️ Skipping refresh - too soon after last refresh (debounced)'
+    )
+    return
+  }
+
+  // Store current parameter list for comparison
+  const currentParams = [...parameterRequirements.value.parameters]
+
+  // Add a delay to ensure the backend has processed the new template and committed the transaction
+  // Also ensure selectedTemplate has been updated by templateConfig.save()
+  await new Promise(resolve => setTimeout(resolve, 1500))
+
+  console.log(
+    '[ExecutionController] 🔄 Refreshing parameter requirements for templateId:',
+    templateConfig.currentPlanTemplateId.value
+  )
+  console.log(
+    '[ExecutionController] 📋 Current selectedTemplate steps:',
+    templateConfig.selectedTemplate.value?.steps?.map(s => s.stepRequirement).join(' ||| ')
+  )
+
+  // Use nextTick to ensure all reactive updates are complete
+  await new Promise(resolve => setTimeout(resolve, 200))
+
+  // Reload parameter requirements
+  await loadParameterRequirements()
+
+  // Update refresh timestamp
+  lastRefreshTimestamp.value = now
+
+  // Compare old and new parameter lists
+  const newParams = [...parameterRequirements.value.parameters]
+  if (areParameterListsEqual(currentParams, newParams)) {
+    console.log(
+      '[ExecutionController] ✅ Parameter list unchanged, values preserved:',
+      JSON.stringify(parameterValues.value, null, 2)
+    )
+  } else {
+    console.log(
+      '[ExecutionController] 🔄 Parameter list changed:',
+      JSON.stringify({ old: currentParams, new: newParams }, null, 2)
+    )
+  }
 }
 
 // Load parameter requirements when plan template changes
 const loadParameterRequirements = async () => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
   console.log(
     '[ExecutionController] 🔄 loadParameterRequirements called for templateId:',
-    props.currentPlanTemplateId
+    planTemplateId
   )
   console.log(
     '[ExecutionController] 📊 Current parameterRequirements before load:',
     JSON.stringify(parameterRequirements.value, null, 2)
   )
 
-  if (!props.currentPlanTemplateId) {
+  if (!planTemplateId) {
     console.log('[ExecutionController] ❌ No template ID, resetting parameters')
     parameterRequirements.value = {
       parameters: [],
@@ -577,6 +898,13 @@ const loadParameterRequirements = async () => {
     parameterValues.value = {}
     return
   }
+
+  // Preserve current parameter values before clearing to prevent data loss
+  const preservedValues = { ...parameterValues.value }
+  console.log(
+    '[ExecutionController] 💾 Preserved parameter values before reload:',
+    JSON.stringify(preservedValues, null, 2)
+  )
 
   // Clear previous data immediately to prevent stale data display
   parameterRequirements.value = {
@@ -590,9 +918,7 @@ const loadParameterRequirements = async () => {
   isLoadingParameters.value = true
   try {
     console.log('[ExecutionController] 🌐 Fetching parameter requirements from API...')
-    const requirements = await PlanParameterApiService.getParameterRequirements(
-      props.currentPlanTemplateId
-    )
+    const requirements = await PlanParameterApiService.getParameterRequirements(planTemplateId)
     console.log(
       '[ExecutionController] 📥 Received requirements from API:',
       JSON.stringify(requirements, null, 2)
@@ -600,10 +926,11 @@ const loadParameterRequirements = async () => {
 
     parameterRequirements.value = requirements
 
-    // Initialize parameter values
+    // Initialize parameter values, restoring preserved values for parameters that still exist
     const newValues: Record<string, string> = {}
     requirements.parameters.forEach(param => {
-      newValues[param] = parameterValues.value[param] || ''
+      // Restore preserved value if it exists, otherwise use empty string
+      newValues[param] = preservedValues[param] || ''
     })
     parameterValues.value = newValues
 
@@ -631,14 +958,24 @@ const loadParameterRequirements = async () => {
       hasParameters: false,
       requirements: '',
     }
-    // Clear parameter values when there's an error to prevent stale data
-    parameterValues.value = {}
+    // Restore preserved values on error to prevent data loss
+    // Only restore if we have previous requirements with matching parameters
+    const previousParams = Object.keys(preservedValues)
+    if (previousParams.length > 0) {
+      console.log(
+        '[ExecutionController] 🔄 Restoring preserved values on error:',
+        JSON.stringify(preservedValues, null, 2)
+      )
+      parameterValues.value = { ...preservedValues }
+    } else {
+      parameterValues.value = {}
+    }
     console.log(
       '[ExecutionController] 🔄 Reset parameterRequirements due to error:',
       JSON.stringify(parameterRequirements.value, null, 2)
     )
     console.log(
-      '[ExecutionController] 🔄 Cleared parameterValues:',
+      '[ExecutionController] 🔄 Restored parameterValues:',
       JSON.stringify(parameterValues.value, null, 2)
     )
   } finally {
@@ -653,6 +990,16 @@ const updateParameterValue = (paramName: string, value: string) => {
   // Clear error for this parameter when user starts typing
   if (parameterErrors.value[paramName]) {
     delete parameterErrors.value[paramName]
+  }
+  // Reset validation attempt flag when user starts filling parameters
+  // This hides the validation message as user corrects the issue
+  if (hasAttemptedExecute.value && canExecute.value) {
+    hasAttemptedExecute.value = false
+  }
+  // Reset tool-level navigation index when user manually types (viewing current, not history)
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (planTemplateId) {
+    parameterHistoryStore.setToolHistoryIndex(planTemplateId, -1)
   }
   updateExecutionParamsFromParameters()
 }
@@ -688,12 +1035,156 @@ const updateExecutionParamsFromParameters = () => {
   } else {
     executionParams.value = ''
   }
-  emit('updateExecutionParams', executionParams.value)
+  // Execution params are now managed internally, no need to emit
+}
+
+// Save current parameter set to history
+const saveParameterSetToHistory = () => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (!planTemplateId) {
+    console.log('[ExecutionController] ⚠️ No planTemplateId, skipping history save')
+    return
+  }
+
+  // Only save if there are parameters
+  if (
+    !parameterRequirements.value.hasParameters ||
+    Object.keys(parameterValues.value).length === 0
+  ) {
+    console.log('[ExecutionController] ⚠️ No parameters to save to history')
+    return
+  }
+
+  // Create a copy of current parameter values
+  const currentSet = { ...parameterValues.value }
+
+  // Save to persistent store (store handles deduplication)
+  parameterHistoryStore.saveParameterSet(planTemplateId, currentSet)
+
+  console.log(
+    '[ExecutionController] 💾 Saved parameter set to history:',
+    JSON.stringify(currentSet, null, 2)
+  )
+
+  // Reset tool-level navigation index to -1 (viewing current, not history)
+  parameterHistoryStore.resetParamHistoryNavigation(planTemplateId)
+}
+
+// Reset tool navigation index
+const resetParamHistoryNavigation = () => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (planTemplateId) {
+    parameterHistoryStore.resetParamHistoryNavigation(planTemplateId)
+  }
+}
+
+// Navigate through parameter history for all parameters together
+const navigateParameterSetHistory = (direction: 'up' | 'down') => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (!planTemplateId) {
+    console.log('[ExecutionController] ⚠️ No planTemplateId, cannot navigate history')
+    return
+  }
+
+  const history = parameterHistoryStore.getHistory(planTemplateId)
+  if (!history || history.length === 0) {
+    console.log('[ExecutionController] ⚠️ No history available for navigation')
+    return
+  }
+
+  // Get current navigation index for this tool (-1 means viewing current)
+  const currentIndex = parameterHistoryStore.getToolHistoryIndex(planTemplateId)
+
+  // Calculate new index based on direction
+  let newIndex: number
+  if (direction === 'up') {
+    // Up means going to older history (higher index in array, since most recent is at index 0)
+    if (currentIndex === -1) {
+      // Currently viewing current value, go to most recent history (index 0)
+      newIndex = 0
+    } else if (currentIndex < history.length - 1) {
+      // Go to next older entry
+      newIndex = currentIndex + 1
+    } else {
+      // Already at oldest, stay there
+      newIndex = currentIndex
+    }
+  } else {
+    // Down means going to newer history (lower index in array)
+    if (currentIndex === -1) {
+      // Currently viewing current value, cannot go down
+      return
+    } else if (currentIndex > 0) {
+      // Go to next newer entry
+      newIndex = currentIndex - 1
+    } else {
+      // At most recent history (index 0), go to empty args
+      newIndex = -1
+      // Clear all parameter values
+      Object.keys(parameterValues.value).forEach(param => {
+        parameterValues.value[param] = ''
+      })
+      parameterHistoryStore.setToolHistoryIndex(planTemplateId, -1)
+      updateExecutionParamsFromParameters()
+      console.log('[ExecutionController] 📜 Cleared all parameter values')
+      return
+    }
+  }
+
+  // Update all parameter values from history if not viewing current
+  if (newIndex >= 0 && newIndex < history.length) {
+    const historySet = parameterHistoryStore.getParameterSetFromHistory(planTemplateId, newIndex)
+    if (historySet) {
+      // Update all parameter values from the history set
+      Object.keys(historySet).forEach(param => {
+        parameterValues.value[param] = historySet[param]
+      })
+      parameterHistoryStore.setToolHistoryIndex(planTemplateId, newIndex)
+      updateExecutionParamsFromParameters()
+      console.log(
+        `[ExecutionController] 📜 Navigated to history index ${newIndex}:`,
+        JSON.stringify(historySet, null, 2)
+      )
+    }
+  } else if (newIndex === -1) {
+    // Reset to current value (just reset index, values remain as user typed)
+    parameterHistoryStore.setToolHistoryIndex(planTemplateId, -1)
+    console.log('[ExecutionController] 📜 Reset to current values')
+  }
+}
+
+// Check if tool has history available
+const hasParameterHistory = (): boolean => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (!planTemplateId) {
+    return false
+  }
+
+  return parameterHistoryStore.hasParameterHistory(planTemplateId)
+}
+
+// Get current history index for the tool
+const getToolHistoryIndex = (): number => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (!planTemplateId) {
+    return -1
+  }
+  return parameterHistoryStore.getToolHistoryIndex(planTemplateId)
+}
+
+// Get history count for current tool
+const getHistoryCount = (): number => {
+  const planTemplateId = templateConfig.currentPlanTemplateId.value
+  if (!planTemplateId) {
+    return 0
+  }
+  const history = parameterHistoryStore.getHistory(planTemplateId)
+  return history ? history.length : 0
 }
 
 // Watch for changes in plan template ID
 watch(
-  () => props.currentPlanTemplateId,
+  () => templateConfig.currentPlanTemplateId.value,
   (newId, oldId) => {
     if (newId && newId !== oldId) {
       // Skip parameter reload if we're currently executing a plan
@@ -701,6 +1192,9 @@ watch(
         console.log('[ExecutionController] ⏸️ Skipping parameter reload - plan is executing')
         return
       }
+
+      // Reset parameter history navigation when template changes
+      resetParamHistoryNavigation()
 
       console.log('[ExecutionController] 🔄 Template ID changed, will reload parameters')
       // If this is a new template ID (not from initial load), retry loading parameters
@@ -719,13 +1213,69 @@ watch(
   }
 )
 
-// Watch for changes in execution params (for backward compatibility)
+// Watch for hasTaskRequirementModified flag change from true to false (indicates save completed)
+// This is the only watch that triggers parameter refresh - only on save, not on input
 watch(
-  () => executionParams.value,
-  newValue => {
-    emit('updateExecutionParams', newValue)
+  () => templateStore.hasTaskRequirementModified,
+  async (newValue, oldValue) => {
+    // When modification flag changes from true to false, it means save was completed
+    if (oldValue === true && newValue === false && templateConfig.currentPlanTemplateId.value) {
+      // Skip if currently executing
+      if (isExecutingPlan.value) {
+        console.log('[ExecutionController] ⏸️ Skipping parameter reload - plan is executing')
+        return
+      }
+
+      // Check debounce to prevent rapid successive refreshes
+      const now = Date.now()
+      if (now - lastRefreshTimestamp.value < REFRESH_DEBOUNCE_MS) {
+        console.log(
+          '[ExecutionController] ⏸️ Skipping parameter refresh - debounced (too soon after last refresh)'
+        )
+        return
+      }
+
+      console.log(
+        '[ExecutionController] 💾 Save completed (hasTaskRequirementModified: true -> false), refreshing parameters'
+      )
+      // Add a delay to ensure backend has processed the save and parameters are updated
+      // Also ensure selectedTemplate has been updated by templateConfig.save()
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      console.log('[ExecutionController] ⏰ Refreshing parameters after save')
+      await refreshParameterRequirements()
+    }
   }
 )
+
+// Watch for plan execution completion to reset isExecutingPlan
+watchEffect(() => {
+  const records = planExecution.planExecutionRecords
+  const recordsArray = Array.from(records.entries())
+
+  // Check both trackedPlanIds and planExecutionRecords to handle the case where
+  // a plan has just started but hasn't been polled yet (no record in planExecutionRecords)
+  const hasTrackedPlans = planExecution.trackedPlanIds.value.size > 0
+  const hasRunningPlansInRecords = recordsArray.some(
+    ([, record]) => record && !record.completed && record.status !== 'failed'
+  )
+
+  // If there are tracked plans but no records yet, consider it as running
+  // This handles the race condition where a plan just started but hasn't been polled
+  const hasRunningPlans = hasTrackedPlans || hasRunningPlansInRecords
+
+  // Reset isExecutingPlan when all plans are completed
+  if (!hasRunningPlans && isExecutingPlan.value) {
+    console.log('[ExecutionController] All plans completed, resetting isExecutingPlan', {
+      hasTrackedPlans,
+      hasRunningPlansInRecords,
+      trackedPlanIds: Array.from(planExecution.trackedPlanIds.value),
+      recordsCount: recordsArray.length,
+    })
+    isExecutingPlan.value = false
+  }
+})
+
+// Execution params are now managed internally, no need to emit updates
 
 // Load parameters on mount
 onMounted(() => {
@@ -737,9 +1287,14 @@ defineExpose({
   executionParams,
   clearExecutionParams,
   loadParameterRequirements,
+  refreshParameterRequirements,
   fileUploadRef,
-  uploadedFiles,
-  uploadKey,
+  get uploadedFiles() {
+    return fileUpload.getUploadedFileNames()
+  },
+  get uploadKey() {
+    return fileUpload.uploadKey.value
+  },
 })
 </script>
 
@@ -799,6 +1354,13 @@ defineExpose({
     flex-direction: column;
     gap: 6px;
 
+    .parameter-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
     .parameter-label {
       font-size: 11px;
       color: rgba(255, 255, 255, 0.8);
@@ -837,6 +1399,95 @@ defineExpose({
       &.error {
         border-color: #ff6b6b;
         box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.2);
+      }
+
+      &.viewing-history {
+        background: rgba(102, 126, 234, 0.15);
+        border-color: rgba(102, 126, 234, 0.4);
+      }
+    }
+
+    .parameter-history-navigation {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .history-navigation-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+
+      .history-position {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.6);
+        min-width: 32px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+
+      .history-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        background: rgba(102, 126, 234, 0.2);
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        border-radius: 4px;
+        color: rgba(255, 255, 255, 0.8);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        flex-shrink: 0;
+
+        &:hover:not(:disabled) {
+          background: rgba(102, 126, 234, 0.3);
+          border-color: rgba(102, 126, 234, 0.5);
+          color: rgba(255, 255, 255, 1);
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+      }
+    }
+
+    .parameter-history-controls {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+
+      .history-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        background: rgba(102, 126, 234, 0.2);
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        border-radius: 4px;
+        color: rgba(255, 255, 255, 0.8);
+        cursor: pointer;
+        transition: all 0.2s ease;
+
+        &:hover:not(:disabled) {
+          background: rgba(102, 126, 234, 0.3);
+          border-color: rgba(102, 126, 234, 0.5);
+          color: white;
+          transform: translateY(-1px);
+        }
+
+        &:active:not(:disabled) {
+          transform: translateY(0);
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
       }
     }
 
@@ -1088,6 +1739,16 @@ defineExpose({
     &:hover:not(:disabled) {
       transform: translateY(-1px);
       box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    }
+  }
+
+  &.stop-button {
+    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+    color: white;
+
+    &:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
     }
   }
 

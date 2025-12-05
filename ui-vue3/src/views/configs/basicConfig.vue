@@ -378,10 +378,12 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
   // Browser Settings
   headless: 'config.basicConfig.browserSettings.headless',
   requestTimeout: 'config.basicConfig.browserSettings.requestTimeout',
+  enableShortUrl: 'config.basicConfig.browserSettings.enableShortUrl',
 
   // General Settings
   debugDetail: 'config.basicConfig.general.debugDetail',
-  baseDir: 'config.basicConfig.general.baseDir',
+  externalLinkedFolder: 'config.basicConfig.general.externalLinkedFolder',
+  enableConversationMemory: 'config.basicConfig.general.enableConversationMemory',
 
   // Interaction Settings
   openBrowser: 'config.basicConfig.interactionSettings.openBrowser',
@@ -422,7 +424,7 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
 // Biggest Group display name mapping,
 // The four configuration groups 'browser', 'interaction', 'system', and 'performance' have no corresponding backend responses and have been temporarily removed.
 const GROUP_DISPLAY_NAMES: Record<string, string> = {
-  manus: 'config.basicConfig.groupDisplayNames.manus', // "Manus"
+  lynxe: 'config.basicConfig.groupDisplayNames.lynxe', // "Lynxe"
   // 'browser': t('config.basicConfig.groupDisplayNames.browser'),
   // 'interaction': t('config.basicConfig.groupDisplayNames.interaction'),
   // 'system': t('config.basicConfig.groupDisplayNames.system'),
@@ -431,7 +433,7 @@ const GROUP_DISPLAY_NAMES: Record<string, string> = {
 
 // Group icon mapping
 const GROUP_ICONS: Record<string, string> = {
-  manus: '🤖',
+  lynxe: '🤖',
   browser: '🌐',
   interaction: '🖥️',
   system: '⚙️',
@@ -588,7 +590,7 @@ const loadAllConfigs = async () => {
 
     // Define known configuration groups (avoid relying on the backend's getAllGroups interface)
     // The four configuration groups 'browser', 'interaction', 'system', and 'performance' have no corresponding backend responses and have been temporarily removed.
-    const knownGroups = ['manus']
+    const knownGroups = ['lynxe']
 
     // Load each group's configuration
     const groupPromises = knownGroups.map(async (groupName: string) => {

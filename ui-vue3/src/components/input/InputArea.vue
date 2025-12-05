@@ -49,15 +49,11 @@
           :title="$t('input.selectionTitle')"
           :disabled="isLoadingTools || isDisabled"
         >
-          <option value="">{{ $t('input.defaultFuncAgent') }}</option>
+          <option value="chat">{{ $t('input.chatMode') }}</option>
           <option v-for="option in selectionOptions" :key="option.value" :value="option.value">
             {{ option.label }}
           </option>
         </select>
-        <button class="plan-mode-btn" :title="$t('input.planMode')" @click="handlePlanModeClick">
-          <Icon icon="carbon:document" />
-          {{ $t('input.planMode') }}
-        </button>
         <button
           v-if="!isTaskRunning"
           class="send-button"
@@ -83,25 +79,31 @@
 </template>
 
 <script setup lang="ts">
-import { CoordinatorToolApiService } from '@/api/coordinator-tool-api-service'
 import { FileInfo } from '@/api/file-upload-api-service'
 import FileUploadComponent from '@/components/file-upload/FileUploadComponent.vue'
-import type { InputMessage } from '@/stores/memory'
-import { memoryStore } from '@/stores/memory'
+import { useFileUploadSingleton } from '@/composables/useFileUpload'
+import { useMessageDialogSingleton } from '@/composables/useMessageDialog'
+import { usePlanExecutionSingleton } from '@/composables/usePlanExecution'
+import { usePlanTemplateConfigSingleton } from '@/composables/usePlanTemplateConfig'
+import { useTaskStop } from '@/composables/useTaskStop'
 import { useTaskStore } from '@/stores/task'
+import type { InputMessage } from '@/types/message-dialog'
 import { Icon } from '@iconify/vue'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 const taskStore = useTaskStore()
+const templateConfig = usePlanTemplateConfigSingleton()
+const messageDialog = useMessageDialogSingleton()
+const planExecution = usePlanExecutionSingleton()
+const { stopTask } = useTaskStop()
+const fileUpload = useFileUploadSingleton()
 
 // Track if task is running
 const isTaskRunning = computed(() => taskStore.hasRunningTask())
 
 interface Props {
-  placeholder?: string
-  disabled?: boolean
   initialValue?: string
   selectionOptions?: Array<{ value: string; label: string }>
 }
@@ -112,42 +114,56 @@ interface InnerToolOption {
   toolName: string
   planTemplateId: string
   paramName: string
-}
-
-interface Emits {
-  (e: 'send', message: InputMessage): void
-  (e: 'clear'): void
-  (e: 'update-state', enabled: boolean, placeholder?: string): void
-  (e: 'plan-mode-clicked'): void
-  (e: 'selection-changed', value: string): void
+  serviceGroup?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  placeholder: '',
-  disabled: false,
   initialValue: '',
   selectionOptions: () => [],
 })
 
-const emit = defineEmits<Emits>()
-
 const inputRef = ref<HTMLTextAreaElement>()
 const fileUploadRef = ref<InstanceType<typeof FileUploadComponent>>()
 const currentInput = ref('')
-const defaultPlaceholder = computed(() => props.placeholder || t('input.placeholder'))
-const currentPlaceholder = ref(defaultPlaceholder.value)
-const uploadedFiles = ref<string[]>([])
-const uploadKey = ref<string | null>(null)
-const selectedOption = ref('')
+const defaultPlaceholder = computed(() => t('input.placeholder'))
+const fileUploadPlaceholder = ref<string | null>(null)
+const currentPlaceholder = computed(() => {
+  // Priority: messageDialog inputPlaceholder > fileUploadPlaceholder > default
+  if (messageDialog.inputPlaceholder.value) {
+    return messageDialog.inputPlaceholder.value
+  }
+  if (fileUploadPlaceholder.value) {
+    return fileUploadPlaceholder.value
+  }
+  return defaultPlaceholder.value
+})
+// Use shared file upload state
+const uploadedFiles = computed(() => fileUpload.getUploadedFileNames())
+const selectedOption = ref('chat') // Default to chat mode
 const innerToolOptions = ref<InnerToolOption[]>([])
 const isLoadingTools = ref(false)
+// Flag to prevent watcher from saving during restoration from localStorage
+const isRestoringSelection = ref(false)
+
+// History management
+const HISTORY_STORAGE_KEY = 'chatInputHistory'
+const MAX_HISTORY_SIZE = 20
+const inputHistory = ref<string[]>([])
+const historyIndex = ref(-1) // -1 means not browsing history
+const originalInputBeforeHistory = ref('') // Store original input when starting to browse history
+
+// Detect operating system for platform-specific shortcuts
+const isMac = computed(() => {
+  if (typeof window === 'undefined') return false
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac/.test(navigator.userAgent)
+})
 
 // Load inner tools with single parameter
 const loadInnerTools = async () => {
   isLoadingTools.value = true
   try {
-    console.log('[InputArea] Loading inner tools...')
-    const allTools = await CoordinatorToolApiService.getAllCoordinatorTools()
+    console.log('[InputArea] Loading inner tools from planTemplateList...')
+    const allTools = templateConfig.getAllCoordinatorToolsFromTemplates()
 
     // Filter tools: enableInternalToolcall=true and exactly one parameter
     const filteredTools: InnerToolOption[] = []
@@ -158,19 +174,31 @@ const loadInnerTools = async () => {
         continue
       }
 
+      // Check if it's enabled for conversation use
+      if (!tool.enableInConversation) {
+        continue
+      }
+
       // Parse inputSchema to count parameters
       try {
         const inputSchema = JSON.parse(tool.inputSchema || '[]')
         if (Array.isArray(inputSchema) && inputSchema.length === 1) {
           // Exactly one parameter
           const param = inputSchema[0]
-          filteredTools.push({
-            value: tool.planTemplateId,
-            label: `${tool.toolName} (${param.name})`,
+          // Format value as serviceGroup.toolName or just toolName if serviceGroup is missing
+          const value = tool.serviceGroup ? `${tool.serviceGroup}.${tool.toolName}` : tool.toolName
+          const toolOption: InnerToolOption = {
+            value: value,
+            label: tool.toolName,
             toolName: tool.toolName,
             planTemplateId: tool.planTemplateId,
             paramName: param.name,
-          })
+          }
+          // Only include serviceGroup if it's defined
+          if (tool.serviceGroup) {
+            toolOption.serviceGroup = tool.serviceGroup
+          }
+          filteredTools.push(toolOption)
         }
       } catch (e) {
         console.warn('[InputArea] Failed to parse inputSchema for tool:', tool.toolName, e)
@@ -182,15 +210,43 @@ const loadInnerTools = async () => {
 
     // Restore selected tool from localStorage and validate it still exists
     const savedTool = localStorage.getItem('inputAreaSelectedTool')
-    if (savedTool) {
-      const toolExists = filteredTools.some(tool => tool.value === savedTool)
-      if (toolExists) {
-        selectedOption.value = savedTool
-        console.log('[InputArea] Restored selected tool from localStorage:', savedTool)
+    if (savedTool && savedTool.trim() !== '') {
+      // Only check if tools are loaded (avoid clearing selection if list is empty during loading)
+      if (filteredTools.length > 0) {
+        const toolExists = filteredTools.some(tool => tool.value === savedTool)
+        if (toolExists) {
+          // Set flag to prevent watcher from overwriting during restoration
+          isRestoringSelection.value = true
+          try {
+            selectedOption.value = savedTool
+            console.log('[InputArea] Restored selected tool from localStorage:', savedTool)
+          } finally {
+            // Reset flag after restoration completes
+            isRestoringSelection.value = false
+          }
+        } else {
+          console.log('[InputArea] Saved tool no longer available, resetting to chat mode')
+          localStorage.removeItem('inputAreaSelectedTool')
+          // Only reset if current selection matches the saved one (avoid clearing user's new selection)
+          if (selectedOption.value === savedTool) {
+            selectedOption.value = 'chat'
+          }
+        }
       } else {
-        console.log('[InputArea] Saved tool no longer available, clearing selection')
-        localStorage.removeItem('inputAreaSelectedTool')
-        selectedOption.value = ''
+        // Tools list is empty, keep existing selection if it matches saved value
+        // This prevents clearing selection when tools haven't loaded yet
+        if (selectedOption.value !== savedTool) {
+          isRestoringSelection.value = true
+          try {
+            selectedOption.value = savedTool
+            console.log(
+              '[InputArea] Restored selected tool from localStorage (tools not loaded yet):',
+              savedTool
+            )
+          } finally {
+            isRestoringSelection.value = false
+          }
+        }
       }
     }
   } catch (error) {
@@ -214,14 +270,140 @@ const selectionOptions = computed(() => {
 
 // Watch for selection changes and persist to localStorage
 watch(selectedOption, newValue => {
-  emit('selection-changed', newValue)
-  // Save to localStorage
-  localStorage.setItem('inputAreaSelectedTool', newValue || '')
+  // Only save to localStorage if not restoring (prevents overwriting during restoration)
+  if (!isRestoringSelection.value) {
+    localStorage.setItem('inputAreaSelectedTool', newValue || '')
+  }
 })
 
+// History management functions
+const loadHistory = () => {
+  try {
+    const stored = localStorage.getItem(HISTORY_STORAGE_KEY)
+    if (stored) {
+      inputHistory.value = JSON.parse(stored)
+    }
+  } catch (error) {
+    console.error('[InputArea] Failed to load history:', error)
+    inputHistory.value = []
+  }
+}
+
+const saveHistory = () => {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(inputHistory.value))
+  } catch (error) {
+    console.error('[InputArea] Failed to save history:', error)
+  }
+}
+
+const saveToHistory = (input: string) => {
+  if (!input.trim()) return
+
+  // Remove duplicate if exists
+  const index = inputHistory.value.indexOf(input)
+  if (index !== -1) {
+    inputHistory.value.splice(index, 1)
+  }
+
+  // Add to the beginning
+  inputHistory.value.unshift(input)
+
+  // Keep only the last MAX_HISTORY_SIZE items
+  if (inputHistory.value.length > MAX_HISTORY_SIZE) {
+    inputHistory.value = inputHistory.value.slice(0, MAX_HISTORY_SIZE)
+  }
+
+  saveHistory()
+}
+
+const navigateHistory = (direction: number) => {
+  if (inputHistory.value.length === 0) return
+
+  // If starting to browse history, save current input
+  if (historyIndex.value === -1) {
+    originalInputBeforeHistory.value = currentInput.value
+  }
+
+  // Calculate new index
+  let newIndex = historyIndex.value + direction
+
+  if (newIndex < -1) {
+    newIndex = -1
+  } else if (newIndex >= inputHistory.value.length) {
+    newIndex = inputHistory.value.length - 1
+  }
+
+  historyIndex.value = newIndex
+
+  // Update input based on history index
+  if (historyIndex.value === -1) {
+    // Restore original input
+    currentInput.value = originalInputBeforeHistory.value
+    originalInputBeforeHistory.value = ''
+  } else {
+    currentInput.value = inputHistory.value[historyIndex.value]
+  }
+
+  adjustInputHeight()
+}
+
 // Load inner tools on mount
+// Watch for planTemplateList changes to reload tools
+watch(
+  () => templateConfig.planTemplateList.value,
+  () => {
+    // Reload tools when planTemplateList changes
+    console.log('[InputArea] planTemplateList changed, reloading inner tools')
+    loadInnerTools()
+  },
+  { deep: true }
+)
+
 onMounted(() => {
   loadInnerTools()
+  loadHistory()
+
+  // Watch for plan completion to reset session (reactive approach)
+  // Only reset when ALL plans are completed, not when any single plan completes
+  watch(
+    () => planExecution.planExecutionRecords,
+    records => {
+      // Check if ALL tracked plans are completed
+      const recordsArray = Array.from(records.entries())
+      if (recordsArray.length === 0) {
+        return // No plans to check
+      }
+
+      // Check if there are any running plans
+      const hasRunningPlans = recordsArray.some(
+        ([, planDetails]) =>
+          planDetails && !planDetails.completed && planDetails.status !== 'failed'
+      )
+
+      // Only reset session when ALL plans are completed
+      if (!hasRunningPlans) {
+        console.log('[InputArea] All plans completed, resetting session')
+        resetSession()
+      }
+    },
+    { deep: true }
+  )
+
+  // Watch for taskToInput changes and set input value automatically
+  watch(
+    () => taskStore.taskToInput,
+    newTaskToInput => {
+      if (newTaskToInput?.trim()) {
+        console.log('[InputArea] taskToInput changed, setting input value:', newTaskToInput)
+        nextTick(() => {
+          setInputValue(newTaskToInput.trim())
+          taskStore.getAndClearTaskToInput()
+        })
+      }
+    },
+    { immediate: false }
+  )
 })
 
 // Function to reset session when starting a new conversation session
@@ -234,34 +416,45 @@ const resetSession = () => {
 onUnmounted(() => {
   resetSession()
 })
-// File upload event handlers
+// File upload event handlers - now just update placeholder based on shared state
 const handleFilesUploaded = (files: FileInfo[], key: string | null) => {
-  uploadedFiles.value = files.map(file => file.originalName)
-  uploadKey.value = key
-  console.log('[InputArea] Files uploaded:', files.length, 'uploadKey:', key)
-
-  // Update placeholder to show files are attached
-  if (uploadedFiles.value.length > 0) {
-    currentPlaceholder.value = t('input.filesAttached', { count: uploadedFiles.value.length })
-  }
+  console.log('[InputArea] Files uploaded event received:', files.length, 'uploadKey:', key)
+  // State is already updated in shared composable, just update placeholder
+  updateFileUploadPlaceholder()
 }
 
 const handleFilesRemoved = (files: FileInfo[]) => {
-  uploadedFiles.value = files.map(file => file.originalName)
-  console.log('[InputArea] Files removed, remaining:', files.length)
-
-  // Update placeholder
-  if (uploadedFiles.value.length === 0) {
-    currentPlaceholder.value = defaultPlaceholder.value
-  } else {
-    currentPlaceholder.value = t('input.filesAttached', { count: uploadedFiles.value.length })
-  }
+  console.log('[InputArea] Files removed event received, remaining:', files.length)
+  // State is already updated in shared composable, just update placeholder
+  updateFileUploadPlaceholder()
 }
 
 const handleUploadKeyChanged = (key: string | null) => {
-  uploadKey.value = key
   console.log('[InputArea] Upload key changed:', key)
+  // State is already updated in shared composable
 }
+
+// Update placeholder based on shared state
+const updateFileUploadPlaceholder = () => {
+  // uploadedFiles is a reactive array, not a ref, so access directly
+  const fileCount = fileUpload.uploadedFiles.length
+  if (fileCount > 0) {
+    fileUploadPlaceholder.value = t('input.filesAttached', { count: fileCount })
+  } else {
+    fileUploadPlaceholder.value = null
+  }
+}
+
+// Watch shared state to update placeholder
+watch(
+  () => {
+    // uploadedFiles is a reactive array, not a ref, so access directly
+    return fileUpload.uploadedFiles.length
+  },
+  () => {
+    updateFileUploadPlaceholder()
+  }
+)
 
 const handleUploadStarted = () => {
   console.log('[InputArea] Upload started')
@@ -275,8 +468,8 @@ const handleUploadError = (error: unknown) => {
   console.error('[InputArea] Upload error:', error)
 }
 
-// Computed property to ensure 'disabled' is a boolean type
-const isDisabled = computed(() => Boolean(props.disabled))
+// Computed property for disabled state - use messageDialog isLoading
+const isDisabled = computed(() => messageDialog.isLoading.value)
 
 const adjustInputHeight = () => {
   nextTick(() => {
@@ -288,9 +481,42 @@ const adjustInputHeight = () => {
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  // Ctrl+Enter (Windows/Linux) or Cmd+Enter (Mac) to send
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault()
     handleSend()
+    return
+  }
+
+  // Platform-specific history navigation:
+  // Mac: Option+ArrowUp/Down
+  // Windows/Linux: Ctrl+ArrowUp/Down
+  // ArrowUp: go to newer (index 0, 1, 2...)
+  // ArrowDown: go to older (index -1, then older items)
+  const historyModifier = isMac.value ? event.altKey : event.ctrlKey
+
+  if (event.key === 'ArrowUp' && historyModifier) {
+    event.preventDefault()
+    navigateHistory(1) // Go to newer (next in history array)
+    return
+  }
+
+  if (event.key === 'ArrowDown' && historyModifier) {
+    event.preventDefault()
+    navigateHistory(-1) // Go to older (previous in history array)
+    return
+  }
+
+  // If user starts typing while browsing history, reset history index
+  if (
+    historyIndex.value !== -1 &&
+    event.key.length === 1 &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  ) {
+    historyIndex.value = -1
+    originalInputBeforeHistory.value = ''
   }
 }
 
@@ -299,55 +525,72 @@ const handleSend = async () => {
 
   const finalInput = currentInput.value.trim()
 
+  // Save to history before sending
+  saveToHistory(finalInput)
+
+  // Reset history browsing state
+  historyIndex.value = -1
+  originalInputBeforeHistory.value = ''
+
+  // Clear the input immediately for instant feedback
+  clearInput()
+
   // Prepare query with tool information if selected
   const query: InputMessage = {
     input: finalInput,
-    memoryId: memoryStore.selectMemoryId,
-    uploadedFiles: uploadedFiles.value,
+    uploadedFiles: uploadedFiles.value, // Computed from shared state
   }
 
-  // Add uploadKey if it exists
-  if (uploadKey.value) {
-    query.uploadKey = uploadKey.value
-    console.log('[InputArea] Including uploadKey in message:', uploadKey.value)
+  // Add uploadKey if it exists (from shared state)
+  const currentUploadKey = fileUpload.uploadKey.value
+  if (currentUploadKey) {
+    query.uploadKey = currentUploadKey
+    console.log('[InputArea] Including uploadKey in message:', currentUploadKey)
   } else {
     console.log('[InputArea] No uploadKey available for message')
   }
 
-  // Check if a tool is selected
-  if (selectedOption.value) {
+  // Check if a tool is selected (not chat mode)
+  if (selectedOption.value && selectedOption.value !== 'chat') {
     const selectedTool = innerToolOptions.value.find(tool => tool.value === selectedOption.value)
 
     if (selectedTool) {
       // Add tool information to query for backend processing
-      // This will be handled by handleChatSendMessage which will call executeByToolName
       const extendedQuery = query as InputMessage & {
         toolName?: string
         replacementParams?: Record<string, string>
+        serviceGroup?: string
       }
-      extendedQuery.toolName = selectedTool.planTemplateId
+      // Use toolName instead of planTemplateId
+      extendedQuery.toolName = selectedTool.toolName
+      // Include serviceGroup if available
+      if (selectedTool.serviceGroup) {
+        extendedQuery.serviceGroup = selectedTool.serviceGroup
+      }
       extendedQuery.replacementParams = {
         [selectedTool.paramName]: finalInput,
       }
-      console.log('[InputArea] Sending message with tool:', selectedTool.toolName)
+      console.log(
+        '[InputArea] Sending message with tool:',
+        selectedTool.toolName,
+        'serviceGroup:',
+        selectedTool.serviceGroup
+      )
     }
   }
 
-  // Use Vue's emit to send a message (this will trigger handleChatSendMessage which shows assistant message)
-  emit('send', query)
-
-  // Clear the input but keep uploaded files and uploadKey for follow-up conversations
-  clearInput()
-}
-
-const handlePlanModeClick = () => {
-  // Trigger the plan mode toggle event
-  emit('plan-mode-clicked')
+  // Call sendMessage from useMessageDialog directly
+  try {
+    await messageDialog.sendMessage(query)
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[InputArea] Send message failed:', errorMessage)
+  }
 }
 
 const handleStop = async () => {
   console.log('[InputArea] Stop button clicked')
-  const success = await taskStore.stopCurrentTask()
+  const success = await stopTask()
   if (success) {
     console.log('[InputArea] Task stopped successfully')
   } else {
@@ -361,7 +604,6 @@ const handleStop = async () => {
 const clearInput = () => {
   currentInput.value = ''
   adjustInputHeight()
-  emit('clear')
 }
 
 /**
@@ -370,10 +612,8 @@ const clearInput = () => {
  * @param {string} [placeholder] - Placeholder text when enabled
  */
 const updateState = (enabled: boolean, placeholder?: string) => {
-  if (placeholder) {
-    currentPlaceholder.value = enabled ? placeholder : t('input.waiting')
-  }
-  emit('update-state', enabled, placeholder)
+  // Update state in useMessageDialog (which will update inputPlaceholder)
+  messageDialog.updateInputState(enabled, placeholder)
 }
 
 /**
@@ -405,28 +645,18 @@ watch(
   { immediate: true }
 )
 
-// Expose methods to the parent component
+// Expose methods to the parent component (if needed)
 defineExpose({
   clearInput,
   updateState,
-  setInputValue,
   getQuery,
-  resetSession,
   focus: () => inputRef.value?.focus(),
   get uploadedFiles() {
-    return fileUploadRef.value?.uploadedFiles?.map(f => f.originalName) || []
+    return fileUpload.getUploadedFileNames()
   },
   get uploadKey() {
-    return fileUploadRef.value?.uploadKey || null
+    return fileUpload.uploadKey.value
   },
-})
-
-onMounted(() => {
-  // Initialization logic after component mounting
-})
-
-onUnmounted(() => {
-  // Cleanup logic before component unmounting
 })
 </script>
 
@@ -473,11 +703,18 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: fit-content;
 }
 
 .selection-input {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  flex-basis: auto;
+  min-width: 0;
+  max-width: 100%;
   padding: 6px 8px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
@@ -487,10 +724,16 @@ onUnmounted(() => {
   cursor: pointer;
   transition: all 0.2s ease;
   outline: none;
-  width: 24ch;
+  width: 18ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-sizing: border-box;
+
+  @media (max-width: 600px) {
+    width: 100%;
+    max-width: 100%;
+  }
 
   &:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -538,27 +781,6 @@ onUnmounted(() => {
     &::placeholder {
       color: #444444;
     }
-  }
-}
-
-.plan-mode-btn {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  color: #ffffff;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: #667eea;
-    transform: translateY(-1px);
   }
 }
 
