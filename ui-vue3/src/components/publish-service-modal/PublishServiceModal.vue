@@ -93,12 +93,22 @@
 
           <!-- Enable In Conversation Option -->
           <div class="conversation-publish-option">
-            <label class="checkbox-label">
-              <input type="checkbox" v-model="publishInConversation" class="checkbox-input" />
+            <label class="checkbox-label" :class="{ disabled: !canEnableInConversation }">
+              <input
+                type="checkbox"
+                v-model="publishInConversation"
+                class="checkbox-input"
+                :disabled="!canEnableInConversation"
+              />
               <span class="checkbox-text">{{ t('mcpService.enableInConversation') }}</span>
             </label>
             <div class="checkbox-description">
-              {{ t('mcpService.enableInConversationDescription') }}
+              <span v-if="canEnableInConversation">
+                {{ t('mcpService.enableInConversationDescription') }}
+              </span>
+              <span v-else class="validation-warning">
+                {{ t('mcpService.singleParameterRequiredForConversation') }}
+              </span>
             </div>
           </div>
         </div>
@@ -187,6 +197,13 @@ const deleting = ref(false)
 const publishAsHttpService = ref(false)
 const publishAsInternalToolcall = ref(true) // Default to true
 const publishInConversation = ref(false) // Default to false
+
+// Check if can enable in conversation (only single parameter methods allowed)
+const canEnableInConversation = computed(() => {
+  // Count non-empty parameters
+  const validParams = formData.parameters.filter(param => param.name && param.name.trim() !== '')
+  return validParams.length === 1
+})
 
 // Parameter requirements from plan template
 const parameterRequirements = ref<ParameterRequirements>({
@@ -412,6 +429,12 @@ const validateForm = (): boolean => {
     return false
   }
 
+  // Validate: Only single parameter methods can be enabled in conversation
+  if (publishInConversation.value && !canEnableInConversation.value) {
+    showMessage(t('mcpService.singleParameterRequiredForConversation'), 'error')
+    return false
+  }
+
   // Validate parameter names and descriptions
   for (let i = 0; i < formData.parameters.length; i++) {
     const param = formData.parameters[i]
@@ -585,6 +608,13 @@ watch(
     }
   }
 )
+
+// Watch parameter count and uncheck conversation option if invalid
+watch(canEnableInConversation, canEnable => {
+  if (!canEnable && publishInConversation.value) {
+    publishInConversation.value = false
+  }
+})
 
 // Initialize when component mounts
 onMounted(async () => {
@@ -1330,6 +1360,24 @@ defineExpose({
   color: rgba(255, 255, 255, 0.6);
   line-height: 1.4;
   margin-left: 24px;
+}
+
+.checkbox-label.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.checkbox-label.disabled .checkbox-input {
+  cursor: not-allowed;
+}
+
+.checkbox-label.disabled .checkbox-text {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.validation-warning {
+  color: rgba(255, 193, 7, 0.9);
+  font-style: italic;
 }
 
 /* HTTP service options now use the same styles as MCP service, no special handling needed */

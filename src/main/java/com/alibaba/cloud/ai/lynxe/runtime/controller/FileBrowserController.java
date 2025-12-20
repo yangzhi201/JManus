@@ -38,6 +38,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.SymbolicLinkDetector;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 
 @RestController
@@ -49,6 +50,9 @@ public class FileBrowserController {
 
 	@Autowired
 	private UnifiedDirectoryManager directoryManager;
+
+	@Autowired
+	private SymbolicLinkDetector symlinkDetector;
 
 	/**
 	 * File tree node representation
@@ -236,7 +240,7 @@ public class FileBrowserController {
 	}
 
 	/**
-	 * Build file tree recursively
+	 * Build file tree recursively with symbolic link cycle detection
 	 */
 	private FileNode buildFileTree(Path directory, String planId) throws IOException {
 		String relativePath = "";
@@ -261,10 +265,15 @@ public class FileBrowserController {
 				return a.getFileName().toString().compareToIgnoreCase(b.getFileName().toString());
 			}).forEach(child -> {
 				try {
-					// Skip symbolic links to prevent infinite loops and security issues
+					// Check if it's a symbolic link
 					if (Files.isSymbolicLink(child)) {
-						logger.debug("Skipping symbolic link: {}", child);
-						return;
+						// Check for circular reference
+						if (symlinkDetector.isCircularReference(child, planDir)) {
+							logger.warn("Skipping circular symlink in file tree: {}",
+									symlinkDetector.getSymlinkInfo(child));
+							return;
+						}
+						logger.debug("Following safe symlink: {}", symlinkDetector.getSymlinkInfo(child));
 					}
 
 					if (Files.isDirectory(child)) {

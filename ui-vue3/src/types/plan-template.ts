@@ -83,6 +83,7 @@ export interface PlanTemplateConfigVO {
   accessLevel?: string
   readOnly?: boolean // Deprecated: kept for backward compatibility, use accessLevel instead
   serviceGroup?: string
+  maxSteps?: number
   toolConfig?: ToolConfigVO
   createTime?: string
   updateTime?: string

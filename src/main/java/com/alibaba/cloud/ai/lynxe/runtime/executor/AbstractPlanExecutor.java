@@ -37,6 +37,7 @@ import com.alibaba.cloud.ai.lynxe.runtime.entity.vo.PlanInterface;
 import com.alibaba.cloud.ai.lynxe.runtime.entity.vo.StepResult;
 import com.alibaba.cloud.ai.lynxe.runtime.service.AgentInterruptionHelper;
 import com.alibaba.cloud.ai.lynxe.runtime.service.FileUploadService;
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 
 /**
  * Abstract base class for plan executors. Contains common logic and basic functionality
@@ -65,6 +66,8 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 
 	protected final FileUploadService fileUploadService;
 
+	protected final UnifiedDirectoryManager unifiedDirectoryManager;
+
 	// Define static final strings for the keys used in executorParams
 	public static final String PLAN_STATUS_KEY = "planStatus";
 
@@ -78,7 +81,8 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 
 	public AbstractPlanExecutor(List<DynamicAgentEntity> agents, PlanExecutionRecorder recorder, LlmService llmService,
 			LynxeProperties lynxeProperties, LevelBasedExecutorPool levelBasedExecutorPool,
-			FileUploadService fileUploadService, AgentInterruptionHelper agentInterruptionHelper) {
+			FileUploadService fileUploadService, AgentInterruptionHelper agentInterruptionHelper,
+			UnifiedDirectoryManager unifiedDirectoryManager) {
 		this.agents = agents;
 		this.recorder = recorder;
 		this.llmService = llmService;
@@ -86,6 +90,7 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 		this.levelBasedExecutorPool = levelBasedExecutorPool;
 		this.fileUploadService = fileUploadService;
 		this.agentInterruptionHelper = agentInterruptionHelper;
+		this.unifiedDirectoryManager = unifiedDirectoryManager;
 	}
 
 	/**
@@ -100,6 +105,8 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 			if (executor == null) {
 				logger.error("No executor found for step type: {}", step.getStepInStr());
 				step.setResult("No executor found for step type: " + step.getStepInStr());
+				step.setStatus(AgentState.FAILED);
+				step.setErrorMessage("No executor found for step type: " + step.getStepInStr());
 				return null;
 			}
 
@@ -113,6 +120,15 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 			}
 
 			BaseAgent.AgentExecResult agentResult = executor.run();
+			if (agentResult == null) {
+				logger.error("Agent {} returned null result", executor.getName());
+				step.setResult("Agent execution returned null result");
+				step.setStatus(AgentState.FAILED);
+				step.setErrorMessage("Agent execution returned null result");
+				context.setSuccess(false);
+				return executor;
+			}
+
 			step.setResult(agentResult.getResult());
 			step.setStatus(agentResult.getState());
 
@@ -390,6 +406,17 @@ public abstract class AbstractPlanExecutor implements PlanExecutorInterface {
 		llmService.clearAgentMemory(planId);
 		if (lastExecutor != null) {
 			lastExecutor.clearUp(planId);
+		}
+		// Remove symbolic link directory when root plan task finishes
+		// Only clean up for root plan (currentPlanId == rootPlanId)
+		String rootPlanId = context.getRootPlanId();
+		if (unifiedDirectoryManager != null && rootPlanId != null && rootPlanId.equals(planId)) {
+			try {
+				unifiedDirectoryManager.removeExternalFolderLink(rootPlanId);
+			}
+			catch (Exception e) {
+				logger.warn("Failed to remove external folder symbolic link for rootPlanId: {}", rootPlanId, e);
+			}
 		}
 	}
 

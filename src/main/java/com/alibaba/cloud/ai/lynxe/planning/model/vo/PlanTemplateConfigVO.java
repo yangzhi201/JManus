@@ -47,6 +47,8 @@ public class PlanTemplateConfigVO {
 
 	private String serviceGroup;
 
+	private Integer maxSteps;
+
 	private ToolConfigVO toolConfig;
 
 	private String createTime;
@@ -161,6 +163,14 @@ public class PlanTemplateConfigVO {
 
 	public void setServiceGroup(String serviceGroup) {
 		this.serviceGroup = serviceGroup;
+	}
+
+	public Integer getMaxSteps() {
+		return maxSteps;
+	}
+
+	public void setMaxSteps(Integer maxSteps) {
+		this.maxSteps = maxSteps;
 	}
 
 	public String getCreateTime() {

@@ -62,7 +62,7 @@
                 v-for="group in filteredServiceGroups"
                 :key="group"
                 class="service-group-option"
-                @mousedown="selectServiceGroup(group)"
+                @click="selectServiceGroup(group)"
               >
                 {{ group }}
               </div>
@@ -93,13 +93,13 @@
               <div class="form-row">
                 <label class="form-label">{{ $t('sidebar.terminateColumns') }}</label>
 
-                <textarea
+                <input
                   :value="step.terminateColumns || ''"
                   @input="e => handleTerminateColumnsInput(e, index)"
-                  class="form-textarea auto-resize"
+                  type="text"
+                  class="form-input"
                   :placeholder="$t('sidebar.terminateColumnsPlaceholder')"
-                  rows="1"
-                ></textarea>
+                />
 
                 <!-- Preview Section -->
                 <div
@@ -137,9 +137,11 @@
                         class="form-input model-search-input"
                         :placeholder="getModelPlaceholder(index)"
                         :disabled="isLoadingModels"
+                        autocomplete="off"
                         @click.stop="openModelDropdown(index)"
                         @focus="openModelDropdown(index)"
                         @input="handleModelSearchInput($event, index)"
+                        @blur="handleModelInputBlur(index)"
                         @keydown.escape="closeModelDropdown(index)"
                         @keydown.enter.prevent="selectFirstFilteredModel(index)"
                         @keydown.down.prevent="navigateModelDown(index)"
@@ -239,6 +241,25 @@
                 </div>
               </div>
 
+              <!-- Max Steps -->
+              <div class="form-row">
+                <label class="form-label">{{ $t('sidebar.maxSteps') || 'Max Steps' }}</label>
+                <input
+                  v-model.number="displayData.maxSteps"
+                  type="number"
+                  class="form-input"
+                  :placeholder="$t('sidebar.maxStepsPlaceholder') || 'Enter max steps (optional)'"
+                  min="1"
+                  @input="handleMaxStepsInput"
+                />
+                <div class="field-description">
+                  {{
+                    $t('sidebar.maxStepsDescription') ||
+                    'Override default max steps for this plan template'
+                  }}
+                </div>
+              </div>
+
               <!-- Tool Selection -->
               <div class="form-row">
                 <AssignedTools
@@ -335,8 +356,8 @@
     />
 
     <!-- Copy Plan Modal -->
-    <div v-if="showCopyPlanModal" class="modal-overlay" @mousedown="handleModalOverlayClick">
-      <div class="modal-content" @mousedown.stop>
+    <div v-if="showCopyPlanModal" class="modal-overlay" @click="handleModalOverlayClick">
+      <div class="modal-content" @click.stop>
         <div class="modal-header">
           <h3>{{ $t('sidebar.copyPlan') }}</h3>
           <button class="close-btn" @click="closeCopyPlanModal">
@@ -410,6 +431,7 @@ const templateConfig = usePlanTemplateConfigSingleton()
 // Display data - sync with templateConfig
 const displayData = reactive<{
   title: string
+  maxSteps?: number | undefined
   steps: StepConfigWithTools[]
 }>({
   title: '',
@@ -472,6 +494,12 @@ const syncDisplayDataFromConfig = () => {
     if (config.title?.trim() || !displayData.title?.trim()) {
       displayData.title = config.title || ''
     }
+    // Sync maxSteps
+    if (config.maxSteps !== undefined) {
+      displayData.maxSteps = config.maxSteps
+    } else {
+      delete displayData.maxSteps
+    }
     // Deep copy steps to avoid reference issues
     displayData.steps = (config.steps || []).map(step => ({ ...step }))
     // Sync service group
@@ -521,6 +549,7 @@ const syncDisplayDataToTemplateConfig = () => {
   isSyncingFromConfig.value = true
   try {
     templateConfig.setTitle(displayData.title)
+    templateConfig.setMaxSteps(displayData.maxSteps)
     templateConfig.setSteps(displayData.steps)
     if (templateConfig.currentPlanTemplateId.value) {
       templateStore.hasTaskRequirementModified = true
@@ -655,11 +684,15 @@ const handleTerminateColumnsInput = (e: Event, stepIndex: number) => {
   setEditingFlag()
   const step = displayData.steps[stepIndex]
   if (step) {
-    step.terminateColumns = (e.target as HTMLTextAreaElement).value
+    step.terminateColumns = (e.target as HTMLInputElement).value
   }
-  autoResizeTextarea(e)
   // Only update displayData, don't sync to templateConfig or trigger any watchers
   // Sync will happen on save via syncDisplayDataToTemplateConfig()
+}
+
+// Handle max steps input
+const handleMaxStepsInput = () => {
+  setEditingFlag()
 }
 
 // Add step handler
@@ -752,7 +785,14 @@ const closeModelDropdown = (stepIndex: number) => {
   openDropdownSteps.value.delete(stepIndex)
   highlightedIndices.value.set(stepIndex, -1)
   // Reset search filter to selected model name
+  // Only reset if there's a model name, otherwise keep it empty (user cleared it)
   const step = displayData.steps[stepIndex]
+  const currentFilter = getSearchFilter(stepIndex)
+  // If user cleared the input (empty filter), keep it empty and clear modelName
+  if (currentFilter === '' && step) {
+    step.modelName = ''
+  }
+  // Only reset filter if there's a model name to show
   setSearchFilter(stepIndex, step.modelName ?? '')
 }
 
@@ -776,8 +816,33 @@ const selectModelForStep = (modelName: string, stepIndex: number) => {
 const handleModelSearchInput = (event: Event, stepIndex: number) => {
   setEditingFlag()
   const target = event.target as HTMLInputElement
-  setSearchFilter(stepIndex, target.value)
+  const inputValue = target.value
+  setSearchFilter(stepIndex, inputValue)
+
+  // Update step.modelName when user clears the input
+  // This prevents auto-refill when the entire field is deleted
+  const step = displayData.steps[stepIndex]
+  if (step && inputValue === '') {
+    step.modelName = ''
+  }
+
   openModelDropdown(stepIndex)
+}
+
+// Handle model input blur - ensure cleared value persists
+const handleModelInputBlur = (stepIndex: number) => {
+  const step = displayData.steps[stepIndex]
+  const currentFilter = getSearchFilter(stepIndex)
+
+  // If user cleared the input, ensure modelName is also cleared
+  if (step && currentFilter === '') {
+    step.modelName = ''
+  }
+
+  // Close dropdown after a short delay to allow click events on dropdown items
+  setTimeout(() => {
+    closeModelDropdown(stepIndex)
+  }, 200)
 }
 
 // Get highlighted index for a step
@@ -936,7 +1001,7 @@ const closeCopyPlanModal = () => {
 }
 
 // Handle modal overlay click - only close if clicking directly on overlay
-const handleModalOverlayClick = (event: MouseEvent) => {
+const handleModalOverlayClick = (event: Event) => {
   // Only close if the click target is the overlay itself, not its children
   if (event.target === event.currentTarget) {
     closeCopyPlanModal()
@@ -1716,6 +1781,10 @@ const formatTableHeader = (terminateColumns: string): string => {
   color: #ef4444;
   font-weight: 600;
   border: 1px solid rgba(239, 68, 68, 0.3);
+  word-break: break-all;
+  white-space: normal;
+  display: inline-block;
+  max-width: 100%;
 }
 
 /* Copy Plan Modal Styles */

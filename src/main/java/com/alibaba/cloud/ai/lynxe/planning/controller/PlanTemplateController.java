@@ -431,6 +431,8 @@ public class PlanTemplateController {
 					configVO.setUpdateTime(planTemplate.getUpdateTime());
 					// Set version from planTemplate
 					configVO.setVersion(planTemplate.getVersion());
+					// Set maxSteps from planInterface
+					configVO.setMaxSteps(planInterface.getMaxSteps());
 
 					// Convert ExecutionStep list to StepConfig list
 					if (planInterface.getAllSteps() != null) {
@@ -570,6 +572,8 @@ public class PlanTemplateController {
 			configVO.setUpdateTime(planTemplate.getUpdateTime());
 			// Set version from planTemplate
 			configVO.setVersion(planTemplate.getVersion());
+			// Set maxSteps from planInterface
+			configVO.setMaxSteps(planInterface.getMaxSteps());
 
 			// Convert ExecutionStep list to StepConfig list
 			if (planInterface.getAllSteps() != null) {

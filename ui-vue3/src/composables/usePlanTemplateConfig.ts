@@ -84,6 +84,14 @@ export function usePlanTemplateConfig() {
     config.serviceGroup = serviceGroup
   }
 
+  const setMaxSteps = (maxSteps: number | undefined) => {
+    if (maxSteps === undefined || maxSteps === null) {
+      delete config.maxSteps
+    } else {
+      config.maxSteps = maxSteps
+    }
+  }
+
   const setToolConfig = (toolConfig: ToolConfigVO | undefined) => {
     if (toolConfig === undefined) {
       delete config.toolConfig
@@ -153,6 +161,9 @@ export function usePlanTemplateConfig() {
       accessLevel: accessLevel,
       serviceGroup: newConfig.serviceGroup || '',
     }
+    if (newConfig.maxSteps !== undefined) {
+      updatedConfig.maxSteps = newConfig.maxSteps
+    }
     if (newConfig.version !== undefined) {
       updatedConfig.version = newConfig.version
     }
@@ -210,6 +221,10 @@ export function usePlanTemplateConfig() {
       planTemplateId: config.planTemplateId || '',
       accessLevel: accessLevel,
       serviceGroup: config.serviceGroup || '',
+    }
+    // Conditionally include optional properties to satisfy exactOptionalPropertyTypes
+    if (config.maxSteps !== undefined) {
+      jsonConfig.maxSteps = config.maxSteps
     }
     if (config.version !== undefined) {
       jsonConfig.version = config.version
@@ -637,6 +652,7 @@ export function usePlanTemplateConfig() {
     setPlanType,
     setPlanTemplateId,
     setServiceGroup,
+    setMaxSteps,
     setToolConfig,
     setToolDescription,
     setEnableInternalToolcall,

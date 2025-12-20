@@ -32,6 +32,7 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.tool.metadata.ToolMetadata;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -51,6 +52,7 @@ import com.alibaba.cloud.ai.lynxe.llm.StreamingResponseHandler;
 import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpServiceEntity;
 import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpTool;
 import com.alibaba.cloud.ai.lynxe.mcp.service.McpService;
+import com.alibaba.cloud.ai.lynxe.model.repository.DynamicModelRepository;
 import com.alibaba.cloud.ai.lynxe.planning.service.PlanFinalizer;
 import com.alibaba.cloud.ai.lynxe.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.lynxe.runtime.executor.ImageRecognitionExecutorPool;
@@ -79,8 +81,11 @@ import com.alibaba.cloud.ai.lynxe.tool.database.DatabaseWriteTool;
 import com.alibaba.cloud.ai.lynxe.tool.database.UuidGenerateTool;
 import com.alibaba.cloud.ai.lynxe.tool.dirOperator.DirectoryOperator;
 import com.alibaba.cloud.ai.lynxe.tool.excelProcessor.IExcelProcessingService;
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.GitIgnoreMatcher;
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.SymbolicLinkDetector;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
+import com.alibaba.cloud.ai.lynxe.tool.image.ImageGenerationTool;
 import com.alibaba.cloud.ai.lynxe.tool.innerStorage.SmartContentSavingService;
 import com.alibaba.cloud.ai.lynxe.tool.jsxGenerator.JsxGeneratorOperator;
 import com.alibaba.cloud.ai.lynxe.tool.mapreduce.FileBasedParallelExecutionTool;
@@ -89,8 +94,10 @@ import com.alibaba.cloud.ai.lynxe.tool.mapreduce.ParallelExecutionService;
 import com.alibaba.cloud.ai.lynxe.tool.mapreduce.ParallelExecutionTool;
 import com.alibaba.cloud.ai.lynxe.tool.pptGenerator.PptGeneratorOperator;
 import com.alibaba.cloud.ai.lynxe.tool.tableProcessor.TableProcessingService;
+import com.alibaba.cloud.ai.lynxe.tool.textOperator.EnhancedGrep;
 import com.alibaba.cloud.ai.lynxe.tool.textOperator.FileImportOperator;
-import com.alibaba.cloud.ai.lynxe.tool.textOperator.GlobalFileOperator;
+import com.alibaba.cloud.ai.lynxe.tool.textOperator.GlobalFileReadOperator;
+import com.alibaba.cloud.ai.lynxe.tool.textOperator.GlobalFileWriteOperator;
 import com.alibaba.cloud.ai.lynxe.tool.textOperator.TextFileService;
 import com.alibaba.cloud.ai.lynxe.workspace.conversation.service.MemoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -187,6 +194,18 @@ public class PlanningFactory {
 	@Autowired
 	private ToolI18nService toolI18nService;
 
+	@Autowired
+	private SymbolicLinkDetector symlinkDetector;
+
+	@Autowired
+	private GitIgnoreMatcher gitIgnoreMatcher;
+
+	@Autowired
+	private DynamicModelRepository dynamicModelRepository;
+
+	@Autowired
+	private ObjectProvider<RestClient.Builder> restClientBuilderProvider;
+
 	public PlanningFactory(ChromeDriverService chromeDriverService, PlanExecutionRecorder recorder,
 			LynxeProperties lynxeProperties, TextFileService textFileService, McpService mcpService,
 			SmartContentSavingService innerStorageService, UnifiedDirectoryManager unifiedDirectoryManager,
@@ -250,7 +269,7 @@ public class PlanningFactory {
 		if (agentInit) {
 			// Add all tool definitions
 			toolDefinitions.add(BrowserUseTool.getInstance(chromeDriverService, innerStorageService, objectMapper,
-					shortUrlService, textFileService, toolI18nService));
+					shortUrlService, textFileService, toolI18nService, unifiedDirectoryManager));
 			toolDefinitions.add(DatabaseReadTool.getInstance(dataSourceService, objectMapper, unifiedDirectoryManager,
 					toolI18nService));
 			toolDefinitions.add(DatabaseWriteTool.getInstance(dataSourceService, objectMapper, toolI18nService));
@@ -264,11 +283,16 @@ public class PlanningFactory {
 			toolDefinitions.add(new Bash(unifiedDirectoryManager, objectMapper, toolI18nService));
 			// toolDefinitions.add(new DocLoaderTool());
 
-			toolDefinitions.add(new GlobalFileOperator(textFileService, innerStorageService, objectMapper,
+			toolDefinitions.add(new GlobalFileReadOperator(textFileService, innerStorageService, objectMapper,
 					shortUrlService, toolI18nService));
+			toolDefinitions.add(new GlobalFileWriteOperator(textFileService, innerStorageService, objectMapper,
+					shortUrlService, toolI18nService));
+			toolDefinitions.add(new EnhancedGrep(textFileService, objectMapper, toolI18nService, gitIgnoreMatcher,
+					lynxeProperties));
 			toolDefinitions.add(new FileImportOperator(textFileService, null, toolI18nService));
 			toolDefinitions.add(new FileSplitterTool(textFileService, objectMapper, toolI18nService));
-			toolDefinitions.add(new DirectoryOperator(unifiedDirectoryManager, objectMapper, toolI18nService));
+			toolDefinitions
+				.add(new DirectoryOperator(unifiedDirectoryManager, objectMapper, toolI18nService, symlinkDetector));
 			// toolDefinitions.add(new UploadedFileLoaderTool(unifiedDirectoryManager,
 			// applicationContext));
 			// toolDefinitions.add(new TableProcessorTool(tableProcessingService));
@@ -289,6 +313,8 @@ public class PlanningFactory {
 					new ImageOcrProcessor(unifiedDirectoryManager, llmService, lynxeProperties,
 							new ImageRecognitionExecutorPool(lynxeProperties)),
 					excelProcessingService, objectMapper, toolI18nService));
+			toolDefinitions.add(new ImageGenerationTool(dynamicModelRepository, restClientBuilderProvider, objectMapper,
+					toolI18nService));
 			// toolDefinitions.add(new ExcelProcessorTool(excelProcessingService));
 		}
 		else {
@@ -347,7 +373,7 @@ public class PlanningFactory {
 		// Add subplan tool registration
 		if (subplanToolService != null) {
 			try {
-				Map<String, PlanningFactory.ToolCallBackContext> subplanToolCallbacks = subplanToolService
+				Map<String, ToolCallBackContext> subplanToolCallbacks = subplanToolService
 					.createSubplanToolCallbacks(planId, rootPlanId, expectedReturnInfo, serviceGroupIndexService);
 				toolCallbackMap.putAll(subplanToolCallbacks);
 				log.info("Registered {} subplan tools", subplanToolCallbacks.size());
@@ -366,7 +392,7 @@ public class PlanningFactory {
 		// Create RequestConfig and set the timeout (10 minutes for all timeouts)
 		RequestConfig requestConfig = RequestConfig.custom()
 			.setConnectTimeout(Timeout.of(10, TimeUnit.MINUTES)) // Set the connection
-																	// timeout
+			// timeout
 			.setResponseTimeout(Timeout.of(10, TimeUnit.MINUTES))
 			.setConnectionRequestTimeout(Timeout.of(10, TimeUnit.MINUTES))
 			.build();
@@ -388,7 +414,7 @@ public class PlanningFactory {
 	@ConditionalOnMissingBean
 	@ConditionalOnProperty(name = "spring.ai.mcp.client.enabled", havingValue = "false")
 	public ToolCallbackProvider emptyToolCallbackProvider() {
-		return () -> new HashMap<String, PlanningFactory.ToolCallBackContext>();
+		return () -> new HashMap<String, ToolCallBackContext>();
 	}
 
 }

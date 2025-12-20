@@ -368,6 +368,37 @@ public class PlanTemplateConfigService {
 				log.info("Set default serviceGroup 'ungrouped' on PlanTemplate with ID: {}", planTemplateId);
 			}
 
+			// Auto-refresh inputSchema from saved plan JSON to ensure parameters are
+			// up-to-date
+			// This ensures that when users add new parameters (e.g., <<offset>>) and
+			// save,
+			// the inputSchema is automatically updated to reflect the new parameters
+			try {
+				String inputSchemaJson = generateInputSchemaFromPlanTemplate(planTemplateId);
+				savedTemplate.setInputSchema(inputSchemaJson);
+				funcAgentToolRepository.save(savedTemplate);
+
+				// Count parameters for logging
+				int parameterCount = 0;
+				try {
+					com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper.readTree(inputSchemaJson);
+					if (inputSchemaNode.isArray()) {
+						parameterCount = inputSchemaNode.size();
+					}
+				}
+				catch (Exception e) {
+					// Log parsing errors for debugging
+					log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(), e);
+				}
+
+				log.info("Auto-refreshed inputSchema for plan template {} with {} parameters", planTemplateId,
+						parameterCount);
+			}
+			catch (Exception e) {
+				log.warn("Failed to auto-refresh inputSchema for plan template {}: {}", planTemplateId, e.getMessage());
+				// Don't fail the entire save operation if inputSchema refresh fails
+			}
+
 			// Convert entity to VO
 			PlanTemplateConfigVO resultVO = new PlanTemplateConfigVO();
 			resultVO.setPlanTemplateId(savedTemplate.getPlanTemplateId());
@@ -565,7 +596,43 @@ public class PlanTemplateConfigService {
 					toolDescription = configVO.getTitle() != null ? configVO.getTitle() : "";
 				}
 				existingEntity.setToolDescription(toolDescription);
-				existingEntity.setInputSchema(convertInputSchemaListToJson(toolConfig.getInputSchema()));
+
+				// Auto-refresh inputSchema from plan JSON to ensure it matches current
+				// parameters
+				// This is critical: when users add new parameters (e.g., <<offset>>) to
+				// plan JSON and save,
+				// the inputSchema must be refreshed from the latest plan version, not
+				// from the old toolConfig
+				// which may not have the new parameters yet
+				try {
+					String inputSchemaJson = generateInputSchemaFromPlanTemplate(configVO.getPlanTemplateId());
+					existingEntity.setInputSchema(inputSchemaJson);
+
+					// Count parameters for logging
+					int parameterCount = 0;
+					try {
+						com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper
+							.readTree(inputSchemaJson);
+						if (inputSchemaNode.isArray()) {
+							parameterCount = inputSchemaNode.size();
+						}
+					}
+					catch (Exception e) {
+						log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(), e);
+					}
+
+					log.info(
+							"Auto-refreshed inputSchema for coordinator tool {} from plan template {} with {} parameters",
+							id, configVO.getPlanTemplateId(), parameterCount);
+				}
+				catch (Exception e) {
+					log.warn(
+							"Failed to auto-refresh inputSchema for coordinator tool {}, falling back to toolConfig inputSchema: {}",
+							id, e.getMessage());
+					// Fallback to toolConfig inputSchema if auto-refresh fails
+					existingEntity.setInputSchema(convertInputSchemaListToJson(toolConfig.getInputSchema()));
+				}
+
 				// Force enableInternalToolcall to true
 				existingEntity.setEnableInternalToolcall(true);
 				existingEntity.setEnableHttpService(
@@ -963,6 +1030,8 @@ public class PlanTemplateConfigService {
 					configVO.setPlanType(planInterface.getPlanType());
 					configVO.setServiceGroup(planTemplate.getServiceGroup());
 					configVO.setAccessLevel(planTemplate.getAccessLevel());
+					// Set maxSteps from planInterface
+					configVO.setMaxSteps(planInterface.getMaxSteps());
 
 					// Convert ExecutionStep list to StepConfig list
 					if (planInterface.getAllSteps() != null) {

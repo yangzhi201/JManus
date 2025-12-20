@@ -465,7 +465,7 @@ const words: I18nType = {
         debugDetail:
           'Debug mode: The model will output more content to facilitate problem - finding, but it will be slower',
         externalLinkedFolder:
-          "External Directory Mapping: You can specify an external directory, and the system will map this directory to a subdirectory under each task, so you don't need to import the content. You can use an absolute directory path with or without a trailing slash.",
+          "External Directory Mapping: You can specify an external directory, and the system will map this directory to a subdirectory under each task, so you don't need to import the content. You can use an absolute directory path with or without a trailing slash. The mapped directory can be accessed through the linked_external subdirectory.",
         enableConversationMemory: 'Enable Conversation Memory',
       },
       interactionSettings: {
@@ -854,7 +854,7 @@ const words: I18nType = {
     historyUp: 'Previous value',
     historyDown: 'Next value',
     parameterRequirementsHelp:
-      'In the template editor\'s "Task Requirements" section, you can define variable parameters using <<parameter_name>> format (multiple parameters are allowed) to inform the model what format of input your function requires. The default description is the parameter name.',
+      'In the template editor Task Requirements section, you can define variable parameters using the format: double angle brackets followed by parameter_name and closing brackets (e.g., parameter_name). Multiple parameters are allowed. This informs the model what format of input your function requires. The default description is the parameter name.',
     clearAllParams: 'Clear All Parameters',
     noParametersRequired: 'This plan template does not require any parameters',
     fillAllRequiredParameters: 'Please fill in all required parameters',
@@ -1017,6 +1017,9 @@ const words: I18nType = {
     modelName: 'Model Name',
     modelNameDescription:
       'Specify model name for handling specific tasks (such as image recognition, etc.). If not specified, the default model will be used.',
+    maxSteps: 'Max Steps',
+    maxStepsPlaceholder: 'Enter max steps (optional)',
+    maxStepsDescription: 'Override default max steps for this plan template',
     noModelSelected: 'Empty',
     noModelsFound: 'No models found',
     noTools:
@@ -1156,37 +1159,37 @@ const words: I18nType = {
       stockPrice: {
         title: 'Query Stock Price',
         description: "Get today's latest stock price for Alphabet (Agent can use browser tools)",
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/eng/stock-price-query.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/eng/stock-price-query.md',
       },
       weather: {
         title: 'IP Query',
         description:
           'Query geographic location and related information for specified IP addresses (Agent can use MCP tool services)',
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/eng/ip-query.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/eng/ip-query.md',
       },
       queryplan: {
         title: 'Enhanced Research Search',
         description:
           'Search engines, download and read multiple pages, summarize key information (demonstrates functional calls)',
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/eng/query-plan.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/eng/query-plan.md',
       },
       ainovel: {
         title: 'AI Novel Creation',
         description:
           'AI gradually defeats humanity themed novel (to demonstrate long-form content output)',
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/eng/ai-novel.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/eng/ai-novel.md',
       },
       formInputDemo: {
         title: 'AI Intelligent Dynamic Form Demo',
         description:
           'Experience AI intelligent analysis of user needs and dynamic generation of relevant form fields',
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/eng/form-input-demo.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/eng/form-input-demo.md',
       },
       imagePdfRecognition: {
         title: 'Image & PDF Recognition',
         description:
           'Upload images or PDFs and extract text content using OCR technology (demonstrates file processing capabilities)',
-        url: 'https://github.com/talk-flow/public-usecase/blob/main/chn/image-pdf-recognition.md',
+        url: 'https://github.com/Lynxe-public/Lynxe-public-prompts/blob/main/chn/image-pdf-recognition.md',
       },
     },
   },
@@ -1388,6 +1391,8 @@ const words: I18nType = {
     enableInConversation: 'Enable in Conversation',
     enableInConversationDescription:
       'When checked, this tool will be available for use in conversation mode, allowing the AI to call this function during chat interactions.',
+    singleParameterRequiredForConversation:
+      'Only methods with exactly one parameter can be enabled in conversation mode.',
     publishing: 'Publishing...',
     delete: 'Delete',
     deleting: 'Deleting...',

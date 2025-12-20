@@ -166,4 +166,18 @@ public interface PlanInterface {
 
 	public String getResult();
 
+	/**
+	 * Get the maximum execution steps for this plan. If not set, the default value from
+	 * lynxeProperties will be used.
+	 * @return The maximum execution steps, or null if not set
+	 */
+	Integer getMaxSteps();
+
+	/**
+	 * Set the maximum execution steps for this plan. This allows each plan template to
+	 * override the default maxSteps value.
+	 * @param maxSteps The maximum execution steps
+	 */
+	void setMaxSteps(Integer maxSteps);
+
 }

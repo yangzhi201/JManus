@@ -60,6 +60,7 @@ import com.alibaba.cloud.ai.lynxe.event.PlanExceptionEvent;
 import com.alibaba.cloud.ai.lynxe.exception.PlanException;
 import com.alibaba.cloud.ai.lynxe.llm.LlmService;
 import com.alibaba.cloud.ai.lynxe.llm.StreamingResponseHandler;
+import com.alibaba.cloud.ai.lynxe.planning.exception.ParameterValidationException;
 import com.alibaba.cloud.ai.lynxe.planning.service.IPlanParameterMappingService;
 import com.alibaba.cloud.ai.lynxe.planning.service.PlanTemplateConfigService;
 import com.alibaba.cloud.ai.lynxe.planning.service.PlanTemplateService;
@@ -613,7 +614,21 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 					planJson = parameterMappingService.replaceParametersInJson(planJson, parametersForReplacement);
 					logger.debug("Parameter replacement completed successfully");
 				}
+				catch (ParameterValidationException e) {
+					// Parameter validation errors should be thrown externally for proper
+					// error handling
+					// This allows the frontend to receive detailed validation error
+					// messages
+					String errorMsg = "Failed to replace parameters in plan template: " + e.getMessage();
+					logger.error(errorMsg, e);
+					CompletableFuture<PlanExecutionResult> failedFuture = new CompletableFuture<>();
+					// Keep ParameterValidationException type for proper error handling
+					// upstream
+					failedFuture.completeExceptionally(e);
+					return new PlanExecutionWrapper(failedFuture, null);
+				}
 				catch (Exception e) {
+					// Other exceptions (non-parameter validation errors)
 					String errorMsg = "Failed to replace parameters in plan template: " + e.getMessage();
 					logger.error(errorMsg, e);
 					CompletableFuture<PlanExecutionResult> failedFuture = new CompletableFuture<>();

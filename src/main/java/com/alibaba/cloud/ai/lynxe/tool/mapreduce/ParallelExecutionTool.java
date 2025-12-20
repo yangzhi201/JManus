@@ -35,8 +35,15 @@ import com.alibaba.cloud.ai.lynxe.tool.AsyncToolCallBiFunctionDef;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
 import com.alibaba.cloud.ai.lynxe.tool.mapreduce.ParallelExecutionTool.RegisterBatchInput;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
 /**
  * Parallel execution manager that follows DefaultToolCallingManager execution pattern
@@ -112,9 +119,10 @@ public class ParallelExecutionTool extends AbstractBaseTool<RegisterBatchInput>
 
 		private String action;
 
-		@com.fasterxml.jackson.annotation.JsonProperty("tool_name")
+		@JsonProperty("tool_name")
 		private String toolName;
 
+		@JsonDeserialize(using = FunctionsListDeserializer.class)
 		private List<Map<String, Object>> functions;
 
 		public RegisterBatchInput() {
@@ -142,6 +150,69 @@ public class ParallelExecutionTool extends AbstractBaseTool<RegisterBatchInput>
 
 		public void setFunctions(List<Map<String, Object>> functions) {
 			this.functions = functions;
+		}
+
+	}
+
+	/**
+	 * Custom deserializer for functions field that handles both JSON array and JSON
+	 * string formats. This allows the frontend to send functions as either: - A JSON
+	 * array: [{"pattern": "test", "type": "java"}] - A JSON string: "[{\"pattern\":
+	 * \"test\", \"type\": \"java\"}]"
+	 */
+	static class FunctionsListDeserializer extends JsonDeserializer<List<Map<String, Object>>> {
+
+		private static final Logger log = LoggerFactory.getLogger(FunctionsListDeserializer.class);
+
+		private static final ObjectMapper objectMapper = new ObjectMapper();
+
+		@Override
+		public List<Map<String, Object>> deserialize(JsonParser p, DeserializationContext ctxt)
+				throws java.io.IOException {
+			JsonToken currentToken = p.getCurrentToken();
+
+			// If it's already an array, deserialize normally
+			if (currentToken == JsonToken.START_ARRAY) {
+				return objectMapper.readValue(p, new TypeReference<List<Map<String, Object>>>() {
+				});
+			}
+
+			// If it's a string, parse it as JSON first
+			if (currentToken == JsonToken.VALUE_STRING) {
+				String stringValue = p.getText();
+				try {
+					// Try to parse the string as a JSON array
+					JsonParser stringParser = objectMapper.getFactory().createParser(stringValue);
+					return objectMapper.readValue(stringParser, new TypeReference<List<Map<String, Object>>>() {
+					});
+				}
+				catch (Exception e) {
+					log.warn("Failed to parse functions from JSON string: {}", stringValue, e);
+					// Return empty list instead of null to avoid NPE
+					return new ArrayList<>();
+				}
+			}
+
+			// If it's a single object (START_OBJECT), wrap it in a list
+			if (currentToken == JsonToken.START_OBJECT) {
+				try {
+					Map<String, Object> item = objectMapper.readValue(p, new TypeReference<Map<String, Object>>() {
+					});
+					return List.of(item);
+				}
+				catch (Exception e) {
+					log.warn("Failed to parse single object as function parameters", e);
+					return new ArrayList<>();
+				}
+			}
+
+			// For null or other token types, return empty list
+			if (currentToken == JsonToken.VALUE_NULL) {
+				return null;
+			}
+
+			log.warn("Unexpected token type for functions field: {}", currentToken);
+			return new ArrayList<>();
 		}
 
 	}

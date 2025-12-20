@@ -80,6 +80,10 @@ public class TextFileService implements ApplicationRunner, ITextFileService {
 		return innerStorageService;
 	}
 
+	public UnifiedDirectoryManager getUnifiedDirectoryManager() {
+		return unifiedDirectoryManager;
+	}
+
 	private Object getFileLock(String planId) {
 		return getFileState(planId).getFileLock();
 	}

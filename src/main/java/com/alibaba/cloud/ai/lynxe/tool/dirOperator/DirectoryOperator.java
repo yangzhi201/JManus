@@ -15,66 +15,66 @@
  */
 package com.alibaba.cloud.ai.lynxe.tool.dirOperator;
 
+import java.io.IOException;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
+import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.SymbolicLinkDetector;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
-
-import java.io.IOException;
-import java.nio.file.*;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.util.*;
 
 /**
- * Directory operator tool providing file system operations like listing files recursively
- * and copying files/directories similar to Linux commands 'ls -R' and 'cp -r'
+ * Directory operator that performs directory listing operations. This operator provides
+ * access to directory listings that can be accessed across all sub-plans within the same
+ * execution context.
+ *
+ * Keywords: directory listing, list files, list directories, root directory, root folder,
+ * root plan directory, directory operations.
+ *
+ * Use this tool for listing files and directories in the root directory or
+ * subdirectories.
  */
-@Component
-public class DirectoryOperator extends AbstractBaseTool<DirectoryOperator.DirectoryOperationInput> {
+public class DirectoryOperator extends AbstractBaseTool<DirectoryOperator.ListFilesInput> {
 
 	private static final Logger log = LoggerFactory.getLogger(DirectoryOperator.class);
 
-	private final UnifiedDirectoryManager unifiedDirectoryManager;
-
-	private final ObjectMapper objectMapper;
-
-	private final ToolI18nService toolI18nService;
-
-	public DirectoryOperator(UnifiedDirectoryManager unifiedDirectoryManager, ObjectMapper objectMapper,
-			ToolI18nService toolI18nService) {
-		this.unifiedDirectoryManager = unifiedDirectoryManager;
-		this.objectMapper = objectMapper;
-		this.toolI18nService = toolI18nService;
-	}
+	private static final String TOOL_NAME = "directory_operator";
 
 	/**
 	 * Input class for directory operations
 	 */
-	public static class DirectoryOperationInput {
+	public static class ListFilesInput {
 
 		@JsonProperty("action")
 		private String action;
 
-		@JsonProperty("source_path")
-		private String sourcePath;
+		@JsonProperty("path")
+		private String path;
 
-		@JsonProperty("target_path")
-		private String targetPath;
+		@JsonProperty("file_path")
+		private String filePath;
 
-		@JsonProperty("recursive")
-		private Boolean recursive = false;
+		@JsonProperty("glob_pattern")
+		private String globPattern;
 
-		@JsonProperty("file_pattern")
-		private String filePattern;
+		@JsonProperty("target_directory")
+		private String targetDirectory;
 
-		public DirectoryOperationInput() {
-		}
-
+		// Getters and setters
 		public String getAction() {
 			return action;
 		}
@@ -83,315 +83,357 @@ public class DirectoryOperator extends AbstractBaseTool<DirectoryOperator.Direct
 			this.action = action;
 		}
 
-		public String getSourcePath() {
-			return sourcePath;
+		public String getPath() {
+			return path != null ? path : filePath;
 		}
 
-		public void setSourcePath(String sourcePath) {
-			this.sourcePath = sourcePath;
+		public void setPath(String path) {
+			this.path = path;
 		}
 
-		public String getTargetPath() {
-			return targetPath;
+		public String getFilePath() {
+			return filePath;
 		}
 
-		public void setTargetPath(String targetPath) {
-			this.targetPath = targetPath;
+		public void setFilePath(String filePath) {
+			this.filePath = filePath;
 		}
 
-		public Boolean getRecursive() {
-			return recursive;
+		public String getGlobPattern() {
+			return globPattern;
 		}
 
-		public void setRecursive(Boolean recursive) {
-			this.recursive = recursive;
+		public void setGlobPattern(String globPattern) {
+			this.globPattern = globPattern;
 		}
 
-		public String getFilePattern() {
-			return filePattern;
+		public String getTargetDirectory() {
+			return targetDirectory;
 		}
 
-		public void setFilePattern(String filePattern) {
-			this.filePattern = filePattern;
+		public void setTargetDirectory(String targetDirectory) {
+			this.targetDirectory = targetDirectory;
 		}
 
 	}
 
-	@Override
-	public boolean isSelectable() {
-		return true;
+	private final UnifiedDirectoryManager unifiedDirectoryManager;
+
+	private final ObjectMapper objectMapper;
+
+	private final ToolI18nService toolI18nService;
+
+	private final SymbolicLinkDetector symlinkDetector;
+
+	public DirectoryOperator(UnifiedDirectoryManager unifiedDirectoryManager, ObjectMapper objectMapper,
+			ToolI18nService toolI18nService, SymbolicLinkDetector symlinkDetector) {
+		this.unifiedDirectoryManager = unifiedDirectoryManager;
+		this.objectMapper = objectMapper;
+		this.toolI18nService = toolI18nService;
+		this.symlinkDetector = symlinkDetector;
 	}
 
 	@Override
-	public ToolExecuteResult run(DirectoryOperationInput input) {
+	public ToolExecuteResult run(ListFilesInput input) {
+		log.info("DirectoryOperator input: action={}, path={}, glob_pattern={}, target_directory={}", input.getAction(),
+				input.getPath(), input.getGlobPattern(), input.getTargetDirectory());
 		try {
-			if (input == null || input.getAction() == null) {
-				return new ToolExecuteResult("Invalid input: action is required");
+			String action = input.getAction();
+
+			// Default to list_files if no action specified (backward compatibility)
+			if (action == null) {
+				String directoryPath = input.getPath();
+				if (directoryPath == null) {
+					directoryPath = "";
+				}
+				return listFiles(directoryPath);
 			}
 
-			String action = input.getAction().toLowerCase();
-
-			switch (action) {
-				case "ls":
-				case "list":
-					return listFiles(input);
-				case "cp":
-				case "copy":
-					return copyFiles(input);
-				default:
-					return new ToolExecuteResult(
-							"Unsupported action: " + action + ". Supported actions: ls, list, cp, copy");
-			}
+			// Handle different actions using switch expression
+			return switch (action) {
+				case "list_files" -> {
+					String directoryPath = input.getPath();
+					if (directoryPath == null) {
+						directoryPath = "";
+					}
+					yield listFiles(directoryPath);
+				}
+				case "glob" -> {
+					String globPattern = input.getGlobPattern();
+					String targetDirectory = input.getTargetDirectory();
+					if (globPattern == null || globPattern.isEmpty()) {
+						yield new ToolExecuteResult("Error: glob_pattern parameter is required for glob operation");
+					}
+					yield globFiles(globPattern, targetDirectory);
+				}
+				default ->
+					new ToolExecuteResult("Unknown operation: " + action + ". Supported operations: list_files, glob");
+			};
 		}
 		catch (Exception e) {
-			log.error("Error executing directory operation", e);
-			return new ToolExecuteResult("Error executing directory operation: " + e.getMessage());
+			log.error("DirectoryOperator execution failed", e);
+			return new ToolExecuteResult("Tool execution failed: " + e.getMessage());
 		}
 	}
 
 	/**
-	 * List files and directories recursively
+	 * Normalize directory path by removing plan ID prefixes and relative path indicators
 	 */
-	private ToolExecuteResult listFiles(DirectoryOperationInput input) {
+	private String normalizeFilePath(String filePath) {
+		if (filePath == null || filePath.isEmpty()) {
+			return filePath;
+		}
+
+		// Remove leading slashes and relative path indicators
+		String normalized = filePath.trim();
+		while (normalized.startsWith("/")) {
+			normalized = normalized.substring(1);
+		}
+
+		// Remove "./" prefix if present
+		if (normalized.startsWith("./")) {
+			normalized = normalized.substring(2);
+		}
+
+		// Remove plan ID prefix (e.g., "plan-1763035234741/")
+		if (normalized.matches("^plan-[^/]+/.*")) {
+			normalized = normalized.replaceFirst("^plan-[^/]+/", "");
+		}
+
+		return normalized;
+	}
+
+	/**
+	 * List files in the plan/subplan directory
+	 */
+	private ToolExecuteResult listFiles(String directoryPath) {
 		try {
-			if (input.getSourcePath() == null) {
-				return new ToolExecuteResult("Source path is required for list operation");
+			if (this.rootPlanId == null || this.rootPlanId.isEmpty()) {
+				return new ToolExecuteResult("Error: rootPlanId is required for directory operations");
 			}
 
-			Path sourcePath = resolvePath(input.getSourcePath());
-			if (!Files.exists(sourcePath)) {
-				return new ToolExecuteResult("Source path does not exist: " + sourcePath);
+			// Normalize the directory path to remove plan ID prefixes
+			String normalizedPath = normalizeFilePath(directoryPath != null ? directoryPath : "");
+
+			// For list_files, always use root plan directory as the base
+			// This allows listing directories like "linked_external" that exist at root
+			// plan level
+			Path rootPlanDirectory = unifiedDirectoryManager.getRootPlanDirectory(this.rootPlanId);
+
+			// If a subdirectory path is provided, resolve it within root plan directory
+			Path targetDirectory = rootPlanDirectory;
+			if (normalizedPath != null && !normalizedPath.isEmpty() && !normalizedPath.equals(".")
+					&& !normalizedPath.equals("root")) {
+
+				// Use the centralized method from UnifiedDirectoryManager
+				targetDirectory = unifiedDirectoryManager.resolveAndValidatePath(rootPlanDirectory, normalizedPath);
 			}
 
-			List<FileInfo> fileList = new ArrayList<>();
-
-			if (Files.isDirectory(sourcePath)) {
-				if (input.getRecursive() != null && input.getRecursive()) {
-					// Recursive listing
-					Files.walkFileTree(sourcePath, new SimpleFileVisitor<Path>() {
-						@Override
-						public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-							if (shouldIncludeFile(file, input)) {
-								fileList.add(createFileInfo(file, sourcePath, input));
-							}
-							return FileVisitResult.CONTINUE;
-						}
-
-						@Override
-						public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs)
-								throws IOException {
-							if (shouldIncludeFile(dir, input)) {
-								fileList.add(createFileInfo(dir, sourcePath, input));
-							}
-							return FileVisitResult.CONTINUE;
-						}
-					});
+			// Ensure directory exists - create if needed for root plan directory
+			if (!Files.exists(targetDirectory)) {
+				if (normalizedPath == null || normalizedPath.isEmpty() || normalizedPath.equals(".")
+						|| normalizedPath.equals("root")) {
+					// Create root plan directory if it doesn't exist
+					Files.createDirectories(targetDirectory);
 				}
 				else {
-					// Non-recursive listing
-					try (DirectoryStream<Path> stream = Files.newDirectoryStream(sourcePath)) {
-						for (Path path : stream) {
-							if (shouldIncludeFile(path, input)) {
-								fileList.add(createFileInfo(path, sourcePath, input));
-							}
+					return new ToolExecuteResult("Error: Directory does not exist: " + normalizedPath);
+				}
+			}
+
+			if (!Files.isDirectory(targetDirectory)) {
+				return new ToolExecuteResult("Error: Path is not a directory: " + normalizedPath);
+			}
+
+			StringBuilder result = new StringBuilder();
+			result.append("Files: \n");
+			if (normalizedPath != null && !normalizedPath.isEmpty() && !normalizedPath.equals(".")
+					&& !normalizedPath.equals("root")) {
+				result.append(normalizedPath).append("\n");
+			}
+
+			List<Path> files = Files.list(targetDirectory).sorted().toList();
+
+			if (files.isEmpty()) {
+				result.append("(empty directory)\n");
+			}
+			else {
+				for (Path path : files) {
+					try {
+						String fileName = path.getFileName().toString();
+						if (Files.isDirectory(path)) {
+							result.append(String.format("[DIR] %s/\n", fileName));
 						}
+						else {
+							long size = Files.size(path);
+							String sizeStr = formatFileSize(size);
+							result.append(String.format("[FILE] %s (%s)\n", fileName, sizeStr));
+						}
+					}
+					catch (IOException e) {
+						result.append(String.format("[ERROR] %s (error reading)\n", path.getFileName()));
 					}
 				}
 			}
-			else {
-				// Single file
-				fileList.add(createFileInfo(sourcePath, sourcePath.getParent(), input));
-			}
 
-			// Sort by name
-			fileList.sort(Comparator.comparing(FileInfo::getName));
-
-			Map<String, Object> result = new HashMap<>();
-			result.put("operation", "list");
-			result.put("source_path", input.getSourcePath());
-			result.put("recursive", input.getRecursive());
-			result.put("total_files", fileList.size());
-			result.put("files", fileList);
-
-			return new ToolExecuteResult(objectMapper.writeValueAsString(result));
-
+			return new ToolExecuteResult(result.toString());
 		}
 		catch (IOException e) {
-			log.error("Error listing files", e);
+			String pathToLog = normalizeFilePath(directoryPath != null ? directoryPath : "");
+			log.error("Error listing files: {}", pathToLog, e);
 			return new ToolExecuteResult("Error listing files: " + e.getMessage());
 		}
 	}
 
 	/**
-	 * Copy files and directories recursively
+	 * Format file size in human-readable format
 	 */
-	private ToolExecuteResult copyFiles(DirectoryOperationInput input) {
+	private String formatFileSize(long size) {
+		if (size < 1024)
+			return size + " B";
+		if (size < 1024 * 1024)
+			return String.format("%.1f KB", size / 1024.0);
+		if (size < 1024 * 1024 * 1024)
+			return String.format("%.1f MB", size / (1024.0 * 1024));
+		return String.format("%.1f GB", size / (1024.0 * 1024 * 1024));
+	}
+
+	/**
+	 * Find files matching a glob pattern. This method searches for files matching the
+	 * specified glob pattern, with results sorted by modification time (most recently
+	 * modified first).
+	 * @param globPattern The glob pattern to match files against (required)
+	 * @param targetDirectory Optional target directory to search in (defaults to root
+	 * plan directory)
+	 * @return ToolExecuteResult with matching file paths sorted by modification time
+	 */
+	private ToolExecuteResult globFiles(String globPattern, String targetDirectory) {
 		try {
-			if (input.getSourcePath() == null || input.getTargetPath() == null) {
-				return new ToolExecuteResult("Both source_path and target_path are required for copy operation");
+			if (this.rootPlanId == null || this.rootPlanId.isEmpty()) {
+				return new ToolExecuteResult("Error: rootPlanId is required for glob operations");
 			}
 
-			Path sourcePath = resolvePath(input.getSourcePath());
-			Path targetPath = resolvePath(input.getTargetPath());
+			// Normalize glob pattern: auto-prefix with **/ if not starting with **/
+			String normalizedPattern = normalizeGlobPattern(globPattern);
 
-			if (!Files.exists(sourcePath)) {
-				return new ToolExecuteResult("Source path does not exist: " + sourcePath);
-			}
+			// Determine search root directory
+			Path searchRoot;
+			if (targetDirectory != null && !targetDirectory.isEmpty()) {
+				// Normalize target directory path
+				String normalizedTargetDir = normalizeFilePath(targetDirectory);
+				Path rootPlanDirectory = unifiedDirectoryManager.getRootPlanDirectory(this.rootPlanId);
 
-			// Create target directory if it doesn't exist
-			if (Files.isDirectory(sourcePath)) {
-				Files.createDirectories(targetPath);
-			}
-			else {
-				Files.createDirectories(targetPath.getParent());
-			}
+				// Use the centralized method from UnifiedDirectoryManager
+				searchRoot = unifiedDirectoryManager.resolveAndValidatePath(rootPlanDirectory, normalizedTargetDir);
 
-			List<String> copiedFiles = new ArrayList<>();
-			List<String> errors = new ArrayList<>();
+				// Check if target directory exists
+				if (!Files.exists(searchRoot)) {
+					return new ToolExecuteResult("Error: Target directory does not exist: " + normalizedTargetDir);
+				}
 
-			if (Files.isDirectory(sourcePath)) {
-				// Copy directory
-				Files.walkFileTree(sourcePath, new SimpleFileVisitor<Path>() {
-					@Override
-					public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-						Path relativePath = sourcePath.relativize(dir);
-						Path targetDir = targetPath.resolve(relativePath);
-						Files.createDirectories(targetDir);
-						copiedFiles.add("DIR: " + relativePath.toString());
-						return FileVisitResult.CONTINUE;
-					}
-
-					@Override
-					public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-						try {
-							Path relativePath = sourcePath.relativize(file);
-							Path targetFile = targetPath.resolve(relativePath);
-							Files.copy(file, targetFile, StandardCopyOption.REPLACE_EXISTING);
-							copiedFiles.add("FILE: " + relativePath.toString());
-						}
-						catch (IOException e) {
-							errors.add("Failed to copy file " + file + ": " + e.getMessage());
-						}
-						return FileVisitResult.CONTINUE;
-					}
-				});
+				if (!Files.isDirectory(searchRoot)) {
+					return new ToolExecuteResult("Error: Target path is not a directory: " + normalizedTargetDir);
+				}
 			}
 			else {
-				// Copy single file
+				// Default to root plan directory
+				searchRoot = unifiedDirectoryManager.getRootPlanDirectory(this.rootPlanId);
+			}
+
+			// Create PathMatcher for glob pattern
+			FileSystem fileSystem = FileSystems.getDefault();
+			PathMatcher matcher = fileSystem.getPathMatcher("glob:" + normalizedPattern);
+
+			// Find all matching files using safe traversal
+			List<Path> matchingFiles = new ArrayList<>();
+			Files.walkFileTree(searchRoot, symlinkDetector.createSafeFileVisitor(searchRoot, (file, attrs) -> {
+				// Check if file matches the pattern
+				Path relativePath = searchRoot.relativize(file);
+				if (matcher.matches(relativePath)) {
+					matchingFiles.add(file);
+				}
+			}, null // No special directory handling needed
+			));
+
+			// Sort by modification time (most recently modified first)
+			matchingFiles.sort(Comparator.comparing((Path path) -> {
 				try {
-					Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
-					copiedFiles.add("FILE: " + sourcePath.getFileName().toString());
+					FileTime lastModified = Files.getLastModifiedTime(path);
+					return lastModified.toInstant();
 				}
 				catch (IOException e) {
-					errors.add("Failed to copy file " + sourcePath + ": " + e.getMessage());
+					log.warn("Error getting modification time for file: {}", path, e);
+					return java.time.Instant.EPOCH;
+				}
+			}).reversed());
+
+			// Build result
+			StringBuilder result = new StringBuilder();
+			result.append(String.format("Glob results for pattern '%s':\n", globPattern));
+			if (targetDirectory != null && !targetDirectory.isEmpty()) {
+				result.append(String.format("Search directory: %s\n", normalizeFilePath(targetDirectory)));
+			}
+			result.append("=".repeat(60)).append("\n");
+
+			if (matchingFiles.isEmpty()) {
+				result.append("No files found matching the pattern.\n");
+			}
+			else {
+				result.append(String.format("Found %d file(s):\n\n", matchingFiles.size()));
+				for (Path path : matchingFiles) {
+					try {
+						Path relativePath = searchRoot.relativize(path);
+						String relativePathStr = relativePath.toString().replace('\\', '/');
+						long size = Files.size(path);
+						String sizeStr = formatFileSize(size);
+						FileTime lastModified = Files.getLastModifiedTime(path);
+						result.append(String.format("%s (%s, modified: %s)\n", relativePathStr, sizeStr,
+								lastModified.toString()));
+					}
+					catch (IOException e) {
+						log.warn("Error reading file info: {}", path, e);
+						Path relativePath = searchRoot.relativize(path);
+						String relativePathStr = relativePath.toString().replace('\\', '/');
+						result.append(String.format("%s (error reading file info)\n", relativePathStr));
+					}
 				}
 			}
 
-			Map<String, Object> result = new HashMap<>();
-			result.put("operation", "copy");
-			result.put("source_path", input.getSourcePath());
-			result.put("target_path", input.getTargetPath());
-			result.put("copied_files", copiedFiles);
-			result.put("total_copied", copiedFiles.size());
-
-			if (!errors.isEmpty()) {
-				result.put("errors", errors);
-			}
-
-			return new ToolExecuteResult(objectMapper.writeValueAsString(result));
-
+			return new ToolExecuteResult(result.toString());
 		}
 		catch (IOException e) {
-			log.error("Error copying files", e);
-			return new ToolExecuteResult("Error copying files: " + e.getMessage());
+			log.error("Error performing glob search: pattern={}, targetDirectory={}", globPattern, targetDirectory, e);
+			return new ToolExecuteResult("Error performing glob search: " + e.getMessage());
 		}
 	}
 
 	/**
-	 * Check if file should be included based on filters
+	 * Normalize glob pattern by auto-prefixing with **&#47; if not starting with **&#47;
+	 * @param globPattern The original glob pattern
+	 * @return Normalized glob pattern with recursive prefix if needed
 	 */
-	private boolean shouldIncludeFile(Path file, DirectoryOperationInput input) {
-		// Check file pattern
-		if (input.getFilePattern() != null && !input.getFilePattern().trim().isEmpty()) {
-			String fileName = file.getFileName().toString();
-			if (!fileName.matches(input.getFilePattern())) {
-				return false;
+	private String normalizeGlobPattern(String globPattern) {
+		if (globPattern == null || globPattern.isEmpty()) {
+			return globPattern;
+		}
+
+		String trimmed = globPattern.trim();
+
+		// If pattern doesn't start with **/, prepend it for recursive search
+		if (!trimmed.startsWith("**/")) {
+			// Handle patterns that start with / (absolute-like patterns)
+			if (trimmed.startsWith("/")) {
+				trimmed = trimmed.substring(1);
 			}
+			return "**/" + trimmed;
 		}
 
-		return true;
+		return trimmed;
 	}
-
-	/**
-	 * Create file info object
-	 */
-	private FileInfo createFileInfo(Path file, Path basePath, DirectoryOperationInput input) throws IOException {
-		FileInfo info = new FileInfo();
-		info.setName(file.getFileName().toString());
-
-		// Always use subplan-relative paths by default
-		info.setPath(createSubplanRelativePath(file));
-
-		info.setIsDirectory(Files.isDirectory(file));
-
-		if (Files.isRegularFile(file)) {
-			info.setSize(Files.size(file));
-		}
-
-		BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
-		info.setLastModified(attrs.lastModifiedTime().toString());
-		info.setCreated(attrs.creationTime().toString());
-
-		return info;
-	}
-
-	/**
-	 * Create subplan-relative path by removing inner_storage and plan ID directories
-	 */
-	private String createSubplanRelativePath(Path file) {
-		String fullPath = unifiedDirectoryManager.getRelativePathFromWorkingDirectory(file);
-
-		// Pattern: inner_storage/plan-{planId}/subplan-{subplanId}/...
-		// We want to extract: subplan-{subplanId}/...
-
-		if (fullPath.startsWith("inner_storage/")) {
-			String withoutInnerStorage = fullPath.substring("inner_storage/".length());
-
-			// Find the first subplan directory
-			String[] parts = withoutInnerStorage.split("/");
-			if (parts.length >= 2) {
-				// Skip the plan directory (parts[0]) and start from subplan directory
-				// (parts[1])
-				StringBuilder subplanPath = new StringBuilder();
-				for (int i = 1; i < parts.length; i++) {
-					if (subplanPath.length() > 0) {
-						subplanPath.append("/");
-					}
-					subplanPath.append(parts[i]);
-				}
-				return subplanPath.toString();
-			}
-		}
-
-		// If no subplan pattern found, return the original path
-		return fullPath;
-	}
-
-	/**
-	 * Resolve path using unified directory manager
-	 */
-	private Path resolvePath(String pathString) throws IOException {
-		// Relative path from working directory
-		return unifiedDirectoryManager.getRootPlanDirectory(rootPlanId).resolve(pathString);
-
-	}
-
-	// Interface implementation methods
-	private static final String TOOL_NAME = "directory_operator";
 
 	@Override
-	public String getServiceGroup() {
-		return "default-service-group";
+	public String getCurrentToolStateString() {
+		return "";
 	}
 
 	@Override
@@ -410,91 +452,25 @@ public class DirectoryOperator extends AbstractBaseTool<DirectoryOperator.Direct
 	}
 
 	@Override
-	public Class<DirectoryOperationInput> getInputType() {
-		return DirectoryOperationInput.class;
-	}
-
-	@Override
-	public String getCurrentToolStateString() {
-		return "Directory operator ready for file system operations";
+	public Class<ListFilesInput> getInputType() {
+		return ListFilesInput.class;
 	}
 
 	@Override
 	public void cleanup(String planId) {
 		if (planId != null) {
-			log.info("Cleaning up directory operator resources for plan: {}", planId);
-			// No specific cleanup needed for this tool
+			log.info("Cleaning up directory resources for plan: {}", planId);
 		}
 	}
 
-	/**
-	 * File information class
-	 */
-	public static class FileInfo {
+	@Override
+	public String getServiceGroup() {
+		return "file-operations";
+	}
 
-		private String name;
-
-		private String path;
-
-		private boolean isDirectory;
-
-		private long size;
-
-		private String lastModified;
-
-		private String created;
-
-		public FileInfo() {
-		}
-
-		public String getName() {
-			return name;
-		}
-
-		public void setName(String name) {
-			this.name = name;
-		}
-
-		public String getPath() {
-			return path;
-		}
-
-		public void setPath(String path) {
-			this.path = path;
-		}
-
-		public boolean getIsDirectory() {
-			return isDirectory;
-		}
-
-		public void setIsDirectory(boolean isDirectory) {
-			this.isDirectory = isDirectory;
-		}
-
-		public long getSize() {
-			return size;
-		}
-
-		public void setSize(long size) {
-			this.size = size;
-		}
-
-		public String getLastModified() {
-			return lastModified;
-		}
-
-		public void setLastModified(String lastModified) {
-			this.lastModified = lastModified;
-		}
-
-		public String getCreated() {
-			return created;
-		}
-
-		public void setCreated(String created) {
-			this.created = created;
-		}
-
+	@Override
+	public boolean isSelectable() {
+		return true;
 	}
 
 }
