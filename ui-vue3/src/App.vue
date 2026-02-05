@@ -44,6 +44,8 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   overflow-y: auto;
+  /* Improve touch performance */
+  touch-action: pan-y pan-x;
 }
 
 /* Scrollbar styles */

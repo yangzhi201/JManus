@@ -93,11 +93,16 @@ public class ThinkActRecord {
 	// Error message if the cycle encountered problems
 	private String errorMessage;
 
-	// Input character count (total characters in all messages sent to LLM)
+	// Input token count (total tokens in all messages sent to LLM)
+	// Note: Field name kept as inputCharCount for database column compatibility
 	private Integer inputCharCount;
 
-	// Output character count (total characters in LLM response)
+	// Output token count (total tokens in LLM response)
+	// Note: Field name kept as outputCharCount for database column compatibility
 	private Integer outputCharCount;
+
+	// Model context limit (in tokens) used for this think-act cycle
+	private Integer modelContextLimit;
 
 	// Tool name used for action (if applicable)
 	// @deprecated This field is abandoned and kept only for database compatibility.
@@ -306,6 +311,14 @@ public class ThinkActRecord {
 
 	public void setOutputCharCount(Integer outputCharCount) {
 		this.outputCharCount = outputCharCount;
+	}
+
+	public Integer getModelContextLimit() {
+		return modelContextLimit;
+	}
+
+	public void setModelContextLimit(Integer modelContextLimit) {
+		this.modelContextLimit = modelContextLimit;
 	}
 
 	/**

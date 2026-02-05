@@ -16,9 +16,12 @@
 package com.alibaba.cloud.ai.lynxe.mcp.controller;
 
 import com.alibaba.cloud.ai.lynxe.mcp.model.po.McpConfigEntity;
+import com.alibaba.cloud.ai.lynxe.mcp.model.vo.ConnectionStatusInfo;
 import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpConfigVO;
+import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpConnectionStatus;
 import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpServerRequestVO;
 import com.alibaba.cloud.ai.lynxe.mcp.model.vo.McpServersRequestVO;
+import com.alibaba.cloud.ai.lynxe.mcp.service.McpCacheManager;
 import com.alibaba.cloud.ai.lynxe.mcp.service.McpService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -47,6 +50,9 @@ public class McpController {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private McpCacheManager mcpCacheManager;
+
 	/**
 	 * List All MCP Server
 	 * @return All MCP Server as VO objects
@@ -55,6 +61,19 @@ public class McpController {
 	public ResponseEntity<List<McpConfigVO>> list() {
 		List<McpConfigEntity> entities = mcpService.getMcpServers();
 		List<McpConfigVO> vos = McpConfigVO.fromEntities(entities, objectMapper);
+		// Populate connection status from cache manager
+		for (McpConfigVO vo : vos) {
+			ConnectionStatusInfo statusInfo = mcpCacheManager.getConnectionStatus(vo.getMcpServerName());
+			if (statusInfo != null) {
+				vo.setConnectionStatus(statusInfo.getStatus());
+				vo.setConnectionErrorMessage(statusInfo.getErrorMessage());
+			}
+			else {
+				// If no status tracked, default to DISCONNECTED
+				vo.setConnectionStatus(McpConnectionStatus.DISCONNECTED);
+				vo.setConnectionErrorMessage(null);
+			}
+		}
 		return ResponseEntity.ok(vos);
 	}
 

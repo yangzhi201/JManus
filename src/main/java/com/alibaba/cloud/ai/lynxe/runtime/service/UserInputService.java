@@ -219,12 +219,14 @@ public class UserInputService implements IUserInputService {
 		// return
 		// boolean
 		FormInputTool formInputTool = getFormInputTool(planId);
-		if (formInputTool != null && formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT) { // Corrected
-			// to
-			// use
-			// getInputState
-			// and
-			// InputState
+		if (formInputTool == null) {
+			throw new IllegalArgumentException("FormInputTool not found for planId: " + planId);
+		}
+
+		// Allow submission if tool is AWAITING_USER_INPUT or INPUT_TIMEOUT (late
+		// submission)
+		if (formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT
+				|| formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
 			List<FormInputTool.InputItem> inputItems = inputs.entrySet().stream().map(entry -> {
 				return new FormInputTool.InputItem(entry.getKey(), entry.getValue());
 			}).collect(Collectors.toList());
@@ -234,10 +236,7 @@ public class UserInputService implements IUserInputService {
 			return true;
 		}
 		else {
-			if (formInputTool == null) {
-				throw new IllegalArgumentException("FormInputTool not found for planId: " + planId);
-			}
-			// If tool exists but not awaiting input
+			// Tool exists but already processed (INPUT_RECEIVED)
 			return false;
 		}
 	}

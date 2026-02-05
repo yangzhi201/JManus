@@ -30,11 +30,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
-import com.alibaba.cloud.ai.lynxe.tool.database.DataSourceService;
-import com.alibaba.cloud.ai.lynxe.tool.database.DatabaseRequest;
+import com.alibaba.cloud.ai.lynxe.tool.database.databaseOperators.DatabaseRequest;
 import com.alibaba.cloud.ai.lynxe.tool.database.meta.ColumnMeta;
 import com.alibaba.cloud.ai.lynxe.tool.database.meta.IndexMeta;
 import com.alibaba.cloud.ai.lynxe.tool.database.meta.TableMeta;
+import com.alibaba.cloud.ai.lynxe.tool.database.service.DataSourceService;
 import com.alibaba.cloud.ai.lynxe.tool.database.sql.DatabaseSqlGenerator;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;

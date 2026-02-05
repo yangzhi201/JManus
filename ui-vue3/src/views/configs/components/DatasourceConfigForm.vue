@@ -444,13 +444,13 @@ select.config-input option:checked {
 }
 
 select.config-input option:disabled,
-select.config-input option[value=""] {
+select.config-input option[value=''] {
   background: #1a1a1a;
   color: rgba(255, 255, 255, 0.6);
   font-style: italic;
 }
 
-select.config-input option[value=""]:hover {
+select.config-input option[value='']:hover {
   background: #1a1a1a;
   color: rgba(255, 255, 255, 0.6);
 }

@@ -548,10 +548,6 @@ public class GitIgnoreMatcher {
 			return negation;
 		}
 
-		boolean isDirectoryOnly() {
-			return directoryOnly;
-		}
-
 	}
 
 }

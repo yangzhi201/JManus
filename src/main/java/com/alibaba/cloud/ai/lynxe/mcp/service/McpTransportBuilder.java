@@ -68,17 +68,6 @@ public class McpTransportBuilder {
 	private final ConnectionProvider connectionProvider;
 
 	/**
-	 * Shared HttpClient instance for all MCP transports to reduce resource consumption
-	 * and prevent HttpClientImpl$SelectorManager thread accumulation
-	 */
-	private final HttpClient sharedHttpClient;
-
-	/**
-	 * Shared ReactorClientHttpConnector using the shared HttpClient
-	 */
-	private final ReactorClientHttpConnector sharedConnector;
-
-	/**
 	 * SSE-specific HttpClient for long-lived connections with configurable timeouts
 	 */
 	private final HttpClient sseHttpClient;
@@ -102,19 +91,6 @@ public class McpTransportBuilder {
 			.pendingAcquireTimeout(Duration.ofSeconds(30))
 			.evictInBackground(Duration.ofSeconds(120))
 			.build();
-
-		// Create shared HttpClient instance with optimized configuration for regular
-		// transports
-		this.sharedHttpClient = HttpClient.create(connectionProvider)
-			.resolver(DefaultAddressResolverGroup.INSTANCE)
-			.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 30000) // 30 seconds
-			.doOnConnected(conn -> conn.addHandlerLast(new ReadTimeoutHandler(30, TimeUnit.SECONDS))
-				.addHandlerLast(new WriteTimeoutHandler(30, TimeUnit.SECONDS)))
-			.option(ChannelOption.SO_KEEPALIVE, true)
-			.option(ChannelOption.TCP_NODELAY, true);
-
-		// Create shared connector
-		this.sharedConnector = new ReactorClientHttpConnector(sharedHttpClient);
 
 		// Create SSE-specific HttpClient with configurable timeouts
 		// SSE connections are long-lived and may have long periods without data
@@ -321,16 +297,6 @@ public class McpTransportBuilder {
 			.openConnectionOnStartup(false)
 			.build();
 
-	}
-
-	/**
-	 * Create WebClient builder (with baseUrl) using shared HttpClient instance
-	 * @param baseUrl Base URL
-	 * @param serverConfig Server configuration (may contain custom headers)
-	 * @return WebClient builder
-	 */
-	private WebClient.Builder createWebClientBuilder(String baseUrl, McpServerConfig serverConfig) {
-		return createWebClientBuilder(baseUrl, serverConfig, sharedConnector);
 	}
 
 	/**

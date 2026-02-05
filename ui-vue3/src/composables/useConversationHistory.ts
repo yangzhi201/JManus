@@ -47,6 +47,9 @@ export function useConversationHistory() {
     if (record.rootPlanId) {
       planExecutionRecord.rootPlanId = record.rootPlanId
     }
+    if (record.title) {
+      planExecutionRecord.title = record.title
+    }
     if (record.summary) {
       planExecutionRecord.summary = record.summary
     }

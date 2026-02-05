@@ -296,6 +296,29 @@ export function useRightPanel() {
   }
 
   /**
+   * Truncate long text by keeping start and end, replacing middle with ellipsis
+   * @param text - The text to truncate
+   * @param maxLength - Maximum length before truncation (default: 20000)
+   * @param startLength - Length to keep at the start (default: 10000)
+   * @param endLength - Length to keep at the end (default: 10000)
+   * @returns Truncated text if exceeds maxLength, original text otherwise
+   */
+  const truncateLongText = (
+    text: string,
+    maxLength = 20000,
+    startLength = 10000,
+    endLength = 10000
+  ): string => {
+    if (!text || text.length <= maxLength) {
+      return text
+    }
+    const ellipsis = '\n\n... [Content truncated, middle part removed] ...\n\n'
+    const start = text.substring(0, startLength)
+    const end = text.substring(text.length - endLength)
+    return start + ellipsis + end
+  }
+
+  /**
    * Format JSON data for display
    * @param jsonData - The data to format
    * @returns Formatted JSON string or 'N/A' if invalid
@@ -306,17 +329,18 @@ export function useRightPanel() {
       return 'N/A'
     }
 
+    let formatted: string
+
     // If it's already an object, stringify it directly
     if (typeof jsonData === 'object' && jsonData !== null) {
       try {
-        return JSON.stringify(jsonData, null, 2)
+        formatted = JSON.stringify(jsonData, null, 2)
       } catch {
-        return String(jsonData)
+        formatted = String(jsonData)
       }
     }
-
     // If it's a string, try to parse it as JSON
-    if (typeof jsonData === 'string') {
+    else if (typeof jsonData === 'string') {
       const trimmed = jsonData.trim()
       if (trimmed === '') {
         return 'N/A'
@@ -326,15 +350,19 @@ export function useRightPanel() {
         // Try to parse as JSON
         const parsed = JSON.parse(trimmed)
         // Re-stringify with formatting
-        return JSON.stringify(parsed, null, 2)
+        formatted = JSON.stringify(parsed, null, 2)
       } catch {
         // If parsing fails, return the string as-is (might be plain text)
-        return trimmed
+        formatted = trimmed
       }
     }
-
     // For other types (number, boolean, etc.), convert to string
-    return String(jsonData)
+    else {
+      formatted = String(jsonData)
+    }
+
+    // Truncate if exceeds 20000 characters
+    return truncateLongText(formatted)
   }
 
   /**

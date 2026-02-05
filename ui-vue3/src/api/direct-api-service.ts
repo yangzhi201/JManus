@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import type { InputMessage } from '@/types/message-dialog'
 import { memoryStore } from '@/stores/memory'
+import type { InputMessage } from '@/types/message-dialog'
 import { LlmCheckService } from '@/utils/llm-check'
 
 export class DirectApiService {
@@ -49,7 +49,8 @@ export class DirectApiService {
       content?: string
       conversationId?: string
       message?: string
-    }) => void
+    }) => void,
+    abortSignal?: AbortSignal
   ): Promise<{ conversationId?: string; message?: string }> {
     return LlmCheckService.withLlmCheck(async () => {
       console.log('[DirectApiService] sendChatMessage called with:', {
@@ -88,14 +89,31 @@ export class DirectApiService {
       console.log('[DirectApiService] Making SSE request to:', `${this.BASE_URL}/chat`)
       console.log('[DirectApiService] Request body:', requestBody)
 
-      const response = await fetch(`${this.BASE_URL}/chat`, {
+      const fetchOptions: RequestInit = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'text/event-stream',
         },
         body: JSON.stringify(requestBody),
-      })
+      }
+
+      // Only include signal if provided (to satisfy TypeScript exactOptionalPropertyTypes)
+      if (abortSignal !== undefined) {
+        fetchOptions.signal = abortSignal
+      }
+
+      let response: Response
+      try {
+        response = await fetch(`${this.BASE_URL}/chat`, fetchOptions)
+      } catch (fetchError) {
+        // Handle abort errors gracefully
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          console.log('[DirectApiService] Fetch request was aborted')
+          throw fetchError
+        }
+        throw fetchError
+      }
 
       console.log('[DirectApiService] Response status:', response.status, response.ok)
       console.log('[DirectApiService] Response headers:', {
@@ -124,9 +142,23 @@ export class DirectApiService {
 
       try {
         while (true) {
+          // Check if aborted before reading
+          if (abortSignal?.aborted) {
+            console.log('[DirectApiService] Stream aborted, stopping read')
+            reader.releaseLock()
+            throw new DOMException('The operation was aborted.', 'AbortError')
+          }
+
           const { done, value } = await reader.read()
           console.log('[DirectApiService] Read chunk:', { done, valueLength: value?.length })
           if (done) break
+
+          // Check if aborted after reading
+          if (abortSignal?.aborted) {
+            console.log('[DirectApiService] Stream aborted after read, stopping processing')
+            reader.releaseLock()
+            throw new DOMException('The operation was aborted.', 'AbortError')
+          }
 
           buffer += decoder.decode(value, { stream: true })
           console.log(
@@ -302,6 +334,34 @@ export class DirectApiService {
     })
   }
 
+  // Get task status by plan ID
+  public static async getTaskStatus(planId: string): Promise<{
+    planId: string
+    isRunning: boolean
+    exists: boolean
+    desiredState?: string
+    startTime?: string
+    endTime?: string
+    lastUpdated?: string
+    taskResult?: string
+  }> {
+    return LlmCheckService.withLlmCheck(async () => {
+      console.log('[DirectApiService] Getting task status for planId:', planId)
+
+      const response = await fetch(`${this.BASE_URL}/taskStatus/${planId}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to get task status: ${response.status}`)
+      }
+
+      return await response.json()
+    })
+  }
+
   // Stop a running task by plan ID
   public static async stopTask(planId: string): Promise<unknown> {
     return LlmCheckService.withLlmCheck(async () => {
@@ -315,6 +375,28 @@ export class DirectApiService {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error || `Failed to stop task: ${response.status}`)
+      }
+
+      return await response.json()
+    })
+  }
+
+  // Cancel a chat stream by conversationId and streamId
+  public static async cancelChatStream(
+    conversationId: string,
+    streamId: string
+  ): Promise<{ status: string; message: string }> {
+    return LlmCheckService.withLlmCheck(async () => {
+      console.log('[DirectApiService] Cancelling chat stream:', { conversationId, streamId })
+
+      const response = await fetch(`${this.BASE_URL}/chat/${conversationId}/${streamId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Failed to cancel chat stream: ${response.status}`)
       }
 
       return await response.json()

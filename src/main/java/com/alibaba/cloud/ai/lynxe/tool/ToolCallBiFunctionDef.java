@@ -90,12 +90,13 @@ public interface ToolCallBiFunctionDef<I> extends BiFunction<I, ToolContext, Too
 	public void setRootPlanId(String rootPlanId);
 
 	/**
-	 * Get the current tool state string with unified error handling This default
+	 * Get the current tool state info with unified error handling This default
 	 * implementation wraps getCurrentToolStateString() with error handling to ensure
 	 * exceptions don't interrupt the execution flow
-	 * @return Tool state string, or error message if an exception occurs
+	 * @return ToolStateInfo object, or error message wrapped in ToolStateInfo if an
+	 * exception occurs
 	 */
-	public String getCurrentToolStateStringWithErrorHandler();
+	public ToolStateInfo getCurrentToolStateStringWithErrorHandler();
 
 	/**
 	 * Clean up all related resources for the specified planId

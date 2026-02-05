@@ -97,7 +97,7 @@ public abstract class AbstractBaseTool<I> implements ToolCallBiFunctionDef<I> {
 
 	/**
 	 * Get the description information of the tool with service group appended Default
-	 * implementation appends serviceGroup_toolName to the description if serviceGroup is
+	 * implementation appends serviceGroup-toolName to the description if serviceGroup is
 	 * not null or empty
 	 * @return Returns the functional description of the tool with service group appended
 	 * at the end
@@ -108,38 +108,54 @@ public abstract class AbstractBaseTool<I> implements ToolCallBiFunctionDef<I> {
 		String serviceGroup = getServiceGroup();
 		String toolName = getName();
 		if (serviceGroup != null && !serviceGroup.trim().isEmpty() && toolName != null) {
-			return description + " [" + serviceGroup + "_" + toolName + "]";
+			return description + " [" + serviceGroup + "-" + toolName + "]";
 		}
 		return description;
 	}
 
 	/**
-	 * Get the current status string of the tool
-	 * @return Returns a string describing the current status of the tool
+	 * Get the current status information of the tool
+	 * @return Returns a ToolStateInfo object containing key and state string
 	 */
-	public abstract String getCurrentToolStateString();
+	public abstract ToolStateInfo getCurrentToolStateString();
 
 	/**
-	 * Get the current tool state string with unified error handling This method wraps
+	 * Get the current tool state info with unified error handling This method wraps
 	 * getCurrentToolStateString() with error handling to ensure exceptions don't
 	 * interrupt the execution flow
-	 * @return Tool state string, or error message if an exception occurs
+	 * @return ToolStateInfo object, or error message wrapped in ToolStateInfo if an
+	 * exception occurs
 	 */
-	public String getCurrentToolStateStringWithErrorHandler() {
+	public ToolStateInfo getCurrentToolStateStringWithErrorHandler() {
 		try {
 			// Call the original getCurrentToolStateString() method
-			String stateString = getCurrentToolStateString();
-			return stateString != null ? stateString : "";
+			ToolStateInfo stateInfo = getCurrentToolStateString();
+			if (stateInfo == null) {
+				// Extract key from tool
+				String key = getServiceGroup();
+				if (key == null || key.trim().isEmpty()) {
+					key = getName();
+				}
+				if (key == null || key.trim().isEmpty()) {
+					key = "unknown";
+				}
+				return new ToolStateInfo(key, "");
+			}
+			return stateInfo;
 		}
 		catch (Exception e) {
-			// Handle any exception gracefully - return error message instead of throwing
+			// Handle any exception gracefully - return error message wrapped in
+			// ToolStateInfo
 			// This ensures the flow continues even if tool state retrieval fails
 			String toolName = getName();
+			String serviceGroup = getServiceGroup();
+			String key = serviceGroup != null && !serviceGroup.trim().isEmpty() ? serviceGroup
+					: (toolName != null ? toolName : "unknown");
 			String errorMessage = String.format(
 					"Error getting tool state for '%s': %s. You can continue with available information.",
 					toolName != null ? toolName : "unknown tool", e.getMessage());
 			log.warn("Error getting tool state string for tool '{}' (non-fatal): {}", toolName, e.getMessage(), e);
-			return errorMessage;
+			return new ToolStateInfo(key, errorMessage);
 		}
 	}
 

@@ -400,6 +400,7 @@ import { PlanTemplateApiService } from '@/api/plan-template-with-tool-api-servic
 import { ToolApiService } from '@/api/tool-api-service'
 import AssignedTools from '@/components/shared/AssignedTools.vue'
 import ToolSelectionModal from '@/components/tool-selection-modal/ToolSelectionModal.vue'
+import { useAvailableToolsSingleton } from '@/composables/useAvailableTools'
 import { usePlanTemplateConfigSingleton } from '@/composables/usePlanTemplateConfig'
 import { useToast } from '@/plugins/useToast'
 import { templateStore } from '@/stores/templateStore'
@@ -427,6 +428,9 @@ const { isGenerating = false, isExecuting = false } = defineProps<JsonEditorV2Pr
 
 // Get template config singleton
 const templateConfig = usePlanTemplateConfigSingleton()
+
+// Get available tools singleton for validation
+const availableToolsStore = useAvailableToolsSingleton()
 
 // Display data - sync with templateConfig
 const displayData = reactive<{
@@ -601,6 +605,39 @@ const handleRestore = () => {
   }
 }
 
+// Validate that all selected tools exist in available tools
+const validateToolsExist = async (): Promise<{ isValid: boolean; nonExistentTools: string[] }> => {
+  // Ensure available tools are loaded
+  if (
+    availableToolsStore.availableTools.value.length === 0 &&
+    !availableToolsStore.isLoading.value
+  ) {
+    await availableToolsStore.loadAvailableTools()
+  }
+
+  const nonExistentTools: string[] = []
+  const availableTools = availableToolsStore.availableTools.value
+  const availableToolKeys = new Set(availableTools.map(tool => tool.key))
+
+  // Check all steps for non-existent tools
+  for (let i = 0; i < displayData.steps.length; i++) {
+    const step = displayData.steps[i]
+    const selectedToolKeys = step.selectedToolKeys || []
+
+    for (const toolKey of selectedToolKeys) {
+      if (!availableToolKeys.has(toolKey)) {
+        // Store in format that can be parsed for i18n
+        nonExistentTools.push(`Step ${i + 1}: ${toolKey}`)
+      }
+    }
+  }
+
+  return {
+    isValid: nonExistentTools.length === 0,
+    nonExistentTools,
+  }
+}
+
 const handleSave = async () => {
   try {
     if (!templateConfig.selectedTemplate.value) {
@@ -618,6 +655,27 @@ const handleSave = async () => {
     // Sync displayData to templateConfig before validation and save
     // This ensures all user input is synchronized before saving
     syncDisplayDataToTemplateConfig()
+
+    // Validate that all tools exist
+    const toolsValidation = await validateToolsExist()
+    if (!toolsValidation.isValid) {
+      const toolList = toolsValidation.nonExistentTools
+        .map(tool => {
+          // Parse "Step X: toolName" format
+          const match = tool.match(/^Step (\d+): (.+)$/)
+          if (match) {
+            return t('sidebar.nonExistentToolStep', {
+              stepNumber: match[1],
+              toolName: match[2],
+            })
+          }
+          return tool
+        })
+        .join('\n')
+      const errorMessage = `${t('sidebar.cannotSaveNonExistentTools')}\n\n${t('sidebar.nonExistentToolsHeader')}\n${toolList}`
+      toast.error(errorMessage)
+      return
+    }
 
     // Validate config
     const validation = templateConfig.validate()
@@ -748,9 +806,21 @@ const getFilteredModelsForStep = (stepIndex: number) => {
 const getModelDisplayValue = (stepIndex: number): string => {
   const step = displayData.steps[stepIndex]
   const filter = getSearchFilter(stepIndex)
-  if (openDropdownSteps.value.has(stepIndex) && filter !== '') {
+  // If dropdown is open, always show the filter (what user is typing)
+  if (openDropdownSteps.value.has(stepIndex)) {
     return filter
   }
+  // If dropdown is closed, show the filter value
+  // The filter should match modelName, but if user cleared it, filter will be empty
+  // and we want to show empty, not restore from step.modelName
+  if (filter === '' && step.modelName === '') {
+    return ''
+  }
+  // If filter exists, use it (it should match modelName when dropdown is closed)
+  if (filter !== '') {
+    return filter
+  }
+  // Fallback to modelName if filter is not set
   return step.modelName ?? ''
 }
 
@@ -791,9 +861,12 @@ const closeModelDropdown = (stepIndex: number) => {
   // If user cleared the input (empty filter), keep it empty and clear modelName
   if (currentFilter === '' && step) {
     step.modelName = ''
+    // Clear the filter to ensure it stays empty
+    setSearchFilter(stepIndex, '')
+  } else {
+    // Only reset filter if there's a model name to show
+    setSearchFilter(stepIndex, step.modelName ?? '')
   }
-  // Only reset filter if there's a model name to show
-  setSearchFilter(stepIndex, step.modelName ?? '')
 }
 
 const toggleModelDropdown = (stepIndex: number) => {
@@ -914,16 +987,19 @@ const handleClickOutside = (event: MouseEvent) => {
 }
 
 // Initialize search filters when steps change
+// Only initialize filters for new steps, don't override user input
 watch(
-  () => displayData.steps,
-  newSteps => {
-    newSteps.forEach((step, index) => {
+  () => displayData.steps.length,
+  (_newLength, _oldLength) => {
+    // Initialize filters for all steps on first load or when steps are added
+    displayData.steps.forEach((step, index) => {
+      // Only set filter if it doesn't exist (new step or first load)
       if (!modelSearchFilters.value.has(index)) {
         setSearchFilter(index, step.modelName ?? '')
       }
     })
   },
-  { deep: true, immediate: true }
+  { immediate: true }
 )
 
 // Tool selection state
@@ -955,22 +1031,34 @@ const showToolSelectionModal = (stepIndex: number) => {
   showToolModal.value = true
 }
 
-const handleToolSelectionConfirm = (selectedToolIds: string[]) => {
+const handleToolSelectionConfirm = async (selectedToolIds: string[]) => {
   setEditingFlag()
+
+  // Ensure available tools are loaded
+  if (
+    availableToolsStore.availableTools.value.length === 0 &&
+    !availableToolsStore.isLoading.value
+  ) {
+    await availableToolsStore.loadAvailableTools()
+  }
+
+  // Filter out non-existent tools
+  const availableToolKeys = new Set(availableToolsStore.availableTools.value.map(tool => tool.key))
+  const validToolIds = selectedToolIds.filter(toolId => availableToolKeys.has(toolId))
+
   if (currentStepIndex.value >= 0 && currentStepIndex.value < displayData.steps.length) {
-    // Update the specific step's selected tool keys
-    displayData.steps[currentStepIndex.value].selectedToolKeys = [...selectedToolIds]
+    // Update the specific step's selected tool keys with filtered list
+    displayData.steps[currentStepIndex.value].selectedToolKeys = [...validToolIds]
   }
   showToolModal.value = false
   currentStepIndex.value = -1
 }
 
-const handleToolsFiltered = (stepIndex: number, filteredTools: string[]) => {
-  setEditingFlag()
-  if (stepIndex >= 0 && stepIndex < displayData.steps.length) {
-    // Update the step's selected tool keys with filtered tools
-    displayData.steps[stepIndex].selectedToolKeys = [...filteredTools]
-  }
+const handleToolsFiltered = (_stepIndex: number, _filteredTools: string[]) => {
+  // NOTE: Do NOT automatically update selectedToolKeys with filtered tools.
+  // Non-existent tools should remain visible with yellow warning styling
+  // so users can see which tools are missing and manually remove them if needed.
+  // This preserves the original tool selection and shows clear warnings for missing tools.
 }
 
 // Copy plan state

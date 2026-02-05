@@ -28,8 +28,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
-import com.alibaba.cloud.ai.lynxe.tool.database.DataSourceService;
-import com.alibaba.cloud.ai.lynxe.tool.database.DatabaseRequest;
+import com.alibaba.cloud.ai.lynxe.tool.database.databaseOperators.DatabaseRequest;
+import com.alibaba.cloud.ai.lynxe.tool.database.service.DataSourceService;
 
 public class ExecuteSqlAction extends AbstractDatabaseAction {
 

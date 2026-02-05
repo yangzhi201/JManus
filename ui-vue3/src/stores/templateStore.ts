@@ -27,8 +27,8 @@ export class TemplateStore {
   // Track task requirement modifications
   hasTaskRequirementModified = false
 
-  // Organization method: 'by_time' | 'by_abc' | 'by_group_time' | 'by_group_abc'
-  organizationMethod: 'by_time' | 'by_abc' | 'by_group_time' | 'by_group_abc' = 'by_group_time'
+  // Organization method: 'by_group_time' | 'by_group_abc'
+  organizationMethod: 'by_group_time' | 'by_group_abc' = 'by_group_time'
 
   // Template service group mapping (templateId -> serviceGroup)
   templateServiceGroups: Map<string, string> = new Map()
@@ -40,15 +40,8 @@ export class TemplateStore {
   constructor() {
     // Load organization method from localStorage
     const savedMethod = localStorage.getItem('sidebarOrganizationMethod')
-    if (
-      savedMethod &&
-      ['by_time', 'by_abc', 'by_group_time', 'by_group_abc'].includes(savedMethod)
-    ) {
-      this.organizationMethod = savedMethod as
-        | 'by_time'
-        | 'by_abc'
-        | 'by_group_time'
-        | 'by_group_abc'
+    if (savedMethod && ['by_group_time', 'by_group_abc'].includes(savedMethod)) {
+      this.organizationMethod = savedMethod as 'by_group_time' | 'by_group_abc'
     }
     // Load group collapse state from localStorage
     this.loadGroupCollapseState()
@@ -125,7 +118,7 @@ export class TemplateStore {
   private templateConfig = usePlanTemplateConfigSingleton()
 
   // Set organization method
-  setOrganizationMethod(method: 'by_time' | 'by_abc' | 'by_group_time' | 'by_group_abc') {
+  setOrganizationMethod(method: 'by_group_time' | 'by_group_abc') {
     this.organizationMethod = method
     localStorage.setItem('sidebarOrganizationMethod', method)
   }
@@ -269,7 +262,7 @@ export const templateStore = reactive({
   },
   isGroupCollapsed: (groupName: string | null) => storeInstance.isGroupCollapsed(groupName),
   parseDateTime: (dateValue: unknown) => storeInstance.parseDateTime(dateValue),
-  setOrganizationMethod: (method: 'by_time' | 'by_abc' | 'by_group_time' | 'by_group_abc') => {
+  setOrganizationMethod: (method: 'by_group_time' | 'by_group_abc') => {
     storeInstance.setOrganizationMethod(method)
     templateStore.organizationMethod = method
   },
@@ -296,18 +289,6 @@ const sortedTemplatesComputed = computed(() => {
   })
 
   switch (templateStore.organizationMethod) {
-    case 'by_time':
-      return templates.sort((a, b) => {
-        const timeA = templateStore.parseDateTime(a.updateTime ?? a.createTime)
-        const timeB = templateStore.parseDateTime(b.updateTime ?? b.createTime)
-        return timeB.getTime() - timeA.getTime()
-      })
-    case 'by_abc':
-      return templates.sort((a, b) => {
-        const titleA = (a.title ?? '').toLowerCase()
-        const titleB = (b.title ?? '').toLowerCase()
-        return titleA.localeCompare(titleB)
-      })
     case 'by_group_time':
     case 'by_group_abc': {
       const groups = new Map<string, PlanTemplateConfigVO[]>()

@@ -27,17 +27,18 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.stereotype.Service;
 
 import com.alibaba.cloud.ai.lynxe.planning.PlanningFactory.ToolCallBackContext;
-import com.alibaba.cloud.ai.lynxe.runtime.executor.LevelBasedExecutorPool;
+import com.alibaba.cloud.ai.lynxe.runtime.executor.ExecutorPoolProvider;
 import com.alibaba.cloud.ai.lynxe.runtime.service.PlanIdDispatcher;
 import com.alibaba.cloud.ai.lynxe.runtime.service.ServiceGroupIndexService;
 import com.alibaba.cloud.ai.lynxe.tool.AsyncToolCallBiFunctionDef;
+import com.alibaba.cloud.ai.lynxe.tool.TerminateTool;
 import com.alibaba.cloud.ai.lynxe.tool.ToolCallBiFunctionDef;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Common service for parallel execution of tools. Handles the execution logic shared
- * between ParallelExecutionTool and FileBasedParallelExecutionTool.
+ * between parallel execution operators and FileBasedParallelExecutionTool.
  */
 @Service
 public class ParallelExecutionService {
@@ -48,25 +49,25 @@ public class ParallelExecutionService {
 
 	private final PlanIdDispatcher planIdDispatcher;
 
-	private final LevelBasedExecutorPool levelBasedExecutorPool;
+	private final ExecutorPoolProvider executorPoolProvider;
 
 	private final ServiceGroupIndexService serviceGroupIndexService;
 
 	public ParallelExecutionService(ObjectMapper objectMapper, PlanIdDispatcher planIdDispatcher,
-			LevelBasedExecutorPool levelBasedExecutorPool, ServiceGroupIndexService serviceGroupIndexService) {
+			ExecutorPoolProvider executorPoolProvider, ServiceGroupIndexService serviceGroupIndexService) {
 		this.objectMapper = objectMapper;
 		this.planIdDispatcher = planIdDispatcher;
-		this.levelBasedExecutorPool = levelBasedExecutorPool;
+		this.executorPoolProvider = executorPoolProvider;
 		this.serviceGroupIndexService = serviceGroupIndexService;
 	}
 
 	/**
 	 * Look up tool context using qualified key conversion This method handles the
-	 * conversion from raw tool name to qualified key format (serviceGroup_toolName) based
+	 * conversion from raw tool name to qualified key format (serviceGroup-toolName) based
 	 * on serviceGroup, and provides fallback to original toolName if conversion fails.
-	 * Supports both serviceGroup.toolName (dot format) and serviceGroup_toolName
-	 * (underscore format).
-	 * @param toolName The raw tool name to look up (can be in serviceGroup_toolName
+	 * Supports both serviceGroup.toolName (dot format) and serviceGroup-toolName (hyphen
+	 * format).
+	 * @param toolName The raw tool name to look up (can be in serviceGroup-toolName
 	 * format or serviceGroup.toolName format)
 	 * @param toolCallbackMap Map of tool callbacks
 	 * @return ToolCallBackContext if found, null otherwise
@@ -76,7 +77,7 @@ public class ParallelExecutionService {
 			return null;
 		}
 
-		// First, try direct lookup in case tool name is already in serviceGroup_toolName
+		// First, try direct lookup in case tool name is already in serviceGroup-toolName
 		// format
 		ToolCallBackContext toolContext = toolCallbackMap.get(toolName);
 		if (toolContext != null) {
@@ -85,7 +86,7 @@ public class ParallelExecutionService {
 		}
 
 		// If direct lookup failed, try conversion from serviceGroup.toolName to
-		// serviceGroup_toolName format
+		// serviceGroup-toolName format
 		String lookupKey = toolName;
 		if (serviceGroupIndexService != null) {
 			try {
@@ -109,10 +110,10 @@ public class ParallelExecutionService {
 		// compatibility)
 		// This handles cases where tool might be registered without serviceGroup prefix
 		if (toolContext == null) {
-			// Extract tool name part if it's in serviceGroup_toolName format
-			int lastUnderscoreIndex = toolName.lastIndexOf('_');
-			if (lastUnderscoreIndex > 0 && lastUnderscoreIndex < toolName.length() - 1) {
-				String toolNamePart = toolName.substring(lastUnderscoreIndex + 1);
+			// Extract tool name part if it's in serviceGroup-toolName format
+			int lastHyphenIndex = toolName.lastIndexOf('-');
+			if (lastHyphenIndex > 0 && lastHyphenIndex < toolName.length() - 1) {
+				String toolNamePart = toolName.substring(lastHyphenIndex + 1);
 				toolContext = toolCallbackMap.get(toolNamePart);
 				if (toolContext != null) {
 					logger.debug("Found tool using unqualified name '{}' from qualified key '{}'", toolNamePart,
@@ -221,13 +222,23 @@ public class ParallelExecutionService {
 		}
 
 		// Create ToolContext for this execution
-		ToolContext executionContext = new ToolContext(propagatedPlanDepth == null ? Map.of("toolcallId", toolCallId)
-				: Map.of("toolcallId", toolCallId, "planDepth", propagatedPlanDepth));
+		// Copy all context from parent to preserve recursive call chain and other context
+		Map<String, Object> executionContextMap = new HashMap<>();
+		if (toolContext != null && toolContext.getContext() != null) {
+			executionContextMap.putAll(toolContext.getContext());
+		}
+		// Ensure toolcallId is set (use generated one if not in parent context)
+		executionContextMap.put("toolcallId", toolCallId);
+		// Ensure planDepth is set if we have it
+		if (propagatedPlanDepth != null) {
+			executionContextMap.put("planDepth", propagatedPlanDepth);
+		}
+		ToolContext executionContext = new ToolContext(executionContextMap);
 
 		// Execute the tool
-		if (levelBasedExecutorPool != null) {
+		if (executorPoolProvider != null) {
 			if (isAsyncTool) {
-				// Async tool with level-based executor
+				// Async tool with executor pool provider
 				@SuppressWarnings("unchecked")
 				AsyncToolCallBiFunctionDef<Object> asyncTool = (AsyncToolCallBiFunctionDef<Object>) functionInstance;
 				return asyncTool.applyAsync(convertedInput, executionContext).thenApply(result -> {
@@ -250,8 +261,8 @@ public class ParallelExecutionService {
 				});
 			}
 			else {
-				// Sync tool with level-based executor
-				return levelBasedExecutorPool.submitTask(depthLevel, () -> {
+				// Sync tool with executor pool provider
+				return executorPoolProvider.submitTask(depthLevel, () -> {
 					try {
 						@SuppressWarnings("unchecked")
 						ToolExecuteResult result = ((ToolCallBiFunctionDef<Object>) functionInstance)
@@ -340,10 +351,41 @@ public class ParallelExecutionService {
 	public CompletableFuture<List<Map<String, Object>>> executeToolsInParallel(
 			List<ParallelExecutionRequest> executions, Map<String, ToolCallBackContext> toolCallbackMap,
 			ToolContext toolContext) {
-		List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+		// Separate terminate tools from other tools to establish happen-before
+		// relationship
+		// Use instanceof check instead of string comparison for accurate detection
+		// Track original indices to maintain order
+		List<ParallelExecutionRequest> terminateRequests = new ArrayList<>();
+		List<ParallelExecutionRequest> otherRequests = new ArrayList<>();
+		Map<ParallelExecutionRequest, Integer> requestIndexMap = new HashMap<>();
 
 		for (int i = 0; i < executions.size(); i++) {
 			ParallelExecutionRequest request = executions.get(i);
+			requestIndexMap.put(request, i);
+
+			// Check if tool is TerminateTool using instanceof
+			String toolName = request.getToolName();
+			ToolCallBackContext toolContextBackend = lookupToolContext(toolName, toolCallbackMap);
+			boolean isTerminateTool = false;
+
+			if (toolContextBackend != null) {
+				ToolCallBiFunctionDef<?> functionInstance = toolContextBackend.getFunctionInstance();
+				if (functionInstance instanceof TerminateTool) {
+					isTerminateTool = true;
+				}
+			}
+
+			if (isTerminateTool) {
+				terminateRequests.add(request);
+			}
+			else {
+				otherRequests.add(request);
+			}
+		}
+
+		// Execute non-terminate tools first
+		List<CompletableFuture<Map<String, Object>>> otherFutures = new ArrayList<>();
+		for (ParallelExecutionRequest request : otherRequests) {
 			// Create a tool-specific context that includes the toolCallId if provided
 			ToolContext toolSpecificContext = toolContext;
 			if (request.getToolCallId() != null) {
@@ -354,40 +396,141 @@ public class ParallelExecutionService {
 				contextMap.put("toolcallId", request.getToolCallId());
 				toolSpecificContext = new ToolContext(contextMap);
 			}
-			futures
-				.add(executeTool(request.getToolName(), request.getParams(), toolCallbackMap, toolSpecificContext, i));
+			// Use original index from executions list to maintain order
+			int originalIndex = requestIndexMap.get(request);
+			otherFutures.add(executeTool(request.getToolName(), request.getParams(), toolCallbackMap,
+					toolSpecificContext, originalIndex));
 		}
 
-		return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenApply(v -> {
-			List<Map<String, Object>> results = new ArrayList<>();
-			for (CompletableFuture<Map<String, Object>> future : futures) {
-				try {
-					results.add(future.join());
+		// Wait for all non-terminate tools to complete (happen-before relationship)
+		// Since allOf ensures all futures are complete, we can safely get results
+		CompletableFuture<List<Map<String, Object>>> otherResultsFuture = CompletableFuture
+			.allOf(otherFutures.toArray(new CompletableFuture[0]))
+			.thenApply(v -> {
+				List<Map<String, Object>> results = new ArrayList<>();
+				for (CompletableFuture<Map<String, Object>> future : otherFutures) {
+					try {
+						// Future is already completed due to allOf, so getNow() won't
+						// block
+						// Use getNow with null default - if future is not done, something
+						// is wrong
+						Map<String, Object> result = future.getNow(null);
+						if (result != null) {
+							results.add(result);
+						}
+						else {
+							logger.warn("Future result is null, creating error result");
+							Map<String, Object> errorResult = new HashMap<>();
+							errorResult.put("status", "ERROR");
+							errorResult.put("error", "Future result is null");
+							results.add(errorResult);
+						}
+					}
+					catch (Exception e) {
+						logger.error("Error getting result from future: {}", e.getMessage(), e);
+						Map<String, Object> errorResult = new HashMap<>();
+						errorResult.put("status", "ERROR");
+						errorResult.put("error", e.getMessage());
+						results.add(errorResult);
+					}
 				}
-				catch (Exception e) {
-					logger.error("Error getting result from future: {}", e.getMessage(), e);
-					Map<String, Object> errorResult = new HashMap<>();
-					errorResult.put("status", "ERROR");
-					errorResult.put("error", e.getMessage());
-					results.add(errorResult);
-				}
-			}
-			// Sort results by index if present
-			results.sort((a, b) -> {
-				Integer indexA = (Integer) a.get("index");
-				Integer indexB = (Integer) b.get("index");
-				if (indexA == null && indexB == null) {
-					return 0;
-				}
-				if (indexA == null) {
-					return 1;
-				}
-				if (indexB == null) {
-					return -1;
-				}
-				return Integer.compare(indexA, indexB);
+				return results;
 			});
-			return results;
+
+		// After all other tools complete, execute terminate tools
+		if (terminateRequests.isEmpty()) {
+			// No terminate tools, just return other results sorted by index
+			return otherResultsFuture.thenApply(results -> {
+				results.sort((a, b) -> {
+					Integer indexA = (Integer) a.get("index");
+					Integer indexB = (Integer) b.get("index");
+					if (indexA == null && indexB == null) {
+						return 0;
+					}
+					if (indexA == null) {
+						return 1;
+					}
+					if (indexB == null) {
+						return -1;
+					}
+					return Integer.compare(indexA, indexB);
+				});
+				return results;
+			});
+		}
+
+		// Execute terminate tools after all other tools complete
+		return otherResultsFuture.thenCompose(otherResults -> {
+			logger.info("Executing {} terminate tool(s) after all other parallel operations completed",
+					terminateRequests.size());
+			List<CompletableFuture<Map<String, Object>>> terminateFutures = new ArrayList<>();
+			for (ParallelExecutionRequest request : terminateRequests) {
+				// Create a tool-specific context that includes the toolCallId if provided
+				ToolContext toolSpecificContext = toolContext;
+				if (request.getToolCallId() != null) {
+					Map<String, Object> contextMap = new HashMap<>();
+					if (toolContext != null && toolContext.getContext() != null) {
+						contextMap.putAll(toolContext.getContext());
+					}
+					contextMap.put("toolcallId", request.getToolCallId());
+					toolSpecificContext = new ToolContext(contextMap);
+				}
+				// Use original index from executions list to maintain order
+				int originalIndex = requestIndexMap.get(request);
+				terminateFutures.add(executeTool(request.getToolName(), request.getParams(), toolCallbackMap,
+						toolSpecificContext, originalIndex));
+			}
+
+			return CompletableFuture.allOf(terminateFutures.toArray(new CompletableFuture[0])).thenApply(v -> {
+				List<Map<String, Object>> terminateResults = new ArrayList<>();
+				for (CompletableFuture<Map<String, Object>> future : terminateFutures) {
+					try {
+						// Future is already completed due to allOf, so getNow() won't
+						// block
+						// Use getNow with null default - if future is not done, something
+						// is wrong
+						Map<String, Object> result = future.getNow(null);
+						if (result != null) {
+							terminateResults.add(result);
+						}
+						else {
+							logger.warn("Terminate future result is null, creating error result");
+							Map<String, Object> errorResult = new HashMap<>();
+							errorResult.put("status", "ERROR");
+							errorResult.put("error", "Future result is null");
+							terminateResults.add(errorResult);
+						}
+					}
+					catch (Exception e) {
+						logger.error("Error getting terminate tool result from future: {}", e.getMessage(), e);
+						Map<String, Object> errorResult = new HashMap<>();
+						errorResult.put("status", "ERROR");
+						errorResult.put("error", e.getMessage());
+						terminateResults.add(errorResult);
+					}
+				}
+
+				// Combine results from other tools and terminate tools
+				List<Map<String, Object>> allResults = new ArrayList<>(otherResults);
+				allResults.addAll(terminateResults);
+
+				// Sort results by index to maintain original order
+				allResults.sort((a, b) -> {
+					Integer indexA = (Integer) a.get("index");
+					Integer indexB = (Integer) b.get("index");
+					if (indexA == null && indexB == null) {
+						return 0;
+					}
+					if (indexA == null) {
+						return 1;
+					}
+					if (indexB == null) {
+						return -1;
+					}
+					return Integer.compare(indexA, indexB);
+				});
+				return allResults;
+			});
 		});
 	}
 
@@ -405,7 +548,7 @@ public class ParallelExecutionService {
 			// Parse JSON schema
 			Map<String, Object> schema = objectMapper.readValue(parametersSchema, Map.class);
 
-			// Handle oneOf schemas (like in ParallelExecutionTool)
+			// Handle oneOf schemas (like in parallel execution operators)
 			if (schema.containsKey("oneOf")) {
 				// For oneOf, we'll check all variants and collect required fields
 				List<String> allRequired = new ArrayList<>();

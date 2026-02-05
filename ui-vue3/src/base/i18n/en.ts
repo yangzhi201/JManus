@@ -43,7 +43,8 @@ const words: I18nType = {
     customModeDesc: 'Configure any OpenAI API compatible service, such as Ollama, LocalAI, etc.',
     apiKeyLabel: 'DashScope API Key',
     apiKeyPlaceholder: 'Enter your API key',
-    apiKeyHint: 'You can get your API key from Alibaba Cloud Bailian Console.',
+    apiKeyHint:
+      'You can get your API key from Alibaba Cloud Bailian Console. New users can enjoy 1 million input tokens and 1 million output tokens free quota (valid for 90 days).',
     getApiKey: 'Get API Key',
     showApiKey: 'Show API Key',
     hideApiKey: 'Hide API Key',
@@ -108,6 +109,10 @@ const words: I18nType = {
     download: 'Download',
     downloadToView: 'Download to View',
     binaryFile: 'This is a binary file that cannot be displayed in the viewer.',
+    downloadOnlyFile:
+      'This file type requires download to view (e.g., Office documents, PDFs, etc.).',
+    markdownRaw: 'Switch to formatted view',
+    markdownFormatted: 'Switch to raw view',
     open: 'Open',
     copyPath: 'Copy Path',
     noPlanSelected: 'No plan selected. Please execute a task to view files.',
@@ -118,7 +123,7 @@ const words: I18nType = {
       'Generated files like analysis results, reports, and data exports will be displayed in this file browser.',
     noPlanExecuting: 'No task is currently being executed.',
     startTaskTip:
-      'Please start a task in the chat panel on the left. Generated files will be displayed here.',
+      'Please start a task in the chat panel on the right. Generated files will be displayed here.',
     waitingForGeneration: 'Waiting for File Generation',
     planExecuting: 'The AI model is currently executing the plan and generating files.',
     checking: 'Checking...',
@@ -202,6 +207,7 @@ const words: I18nType = {
       model: 'Model Configuration',
       mcp: 'Tools/MCP Configuration',
       database: 'Database Configuration',
+      databaseCleanup: 'History Records Statistics and Cleanup',
       namespace: 'Namespace Configuration',
       planTemplate: 'Plan Template Management',
     },
@@ -217,6 +223,7 @@ const words: I18nType = {
       filesystem: 'File System',
       mcpServiceLoader: 'MCP Service Loader',
       imageRecognition: 'Image Recognition',
+      imageGeneration: 'Image Generation',
     },
     // Model configuration page
     modelConfig: {
@@ -391,6 +398,11 @@ const words: I18nType = {
       exportFailed: 'Export failed',
       statusToggleSuccess: 'Status toggle successful',
       statusToggleFailed: 'Status toggle failed',
+      connectionStatus: {
+        connected: 'Connected',
+        disconnected: 'Disconnected',
+        error: 'Error',
+      },
       missingUrlField: 'Missing url field: {serverId} - must have url or baseUrl when no command',
       urlFieldTip: '💡 Please provide url or baseUrl field',
       serverConfigWarning: 'Server {serverId} has no command but also no url or baseUrl',
@@ -452,6 +464,37 @@ const words: I18nType = {
       deleteMessage:
         'Are you sure you want to delete the configuration "{name}"? This action cannot be undone.',
     },
+    // Database cleanup page
+    databaseCleanup: {
+      title: 'History Records Statistics and Cleanup',
+      description:
+        'Here you can view all historical chat records. You can check their counts and choose to clear them. After clearing, the system can maintain a clean state, but all conversations will be lost. Please choose carefully.',
+      tableName: 'Table Name',
+      rowCount: 'Row Count',
+      refresh: 'Refresh',
+      clearAll: 'Clear All Tables',
+      clearConfirm: 'Confirm Clear History Records?',
+      clearMessage:
+        'This will permanently delete all historical records from the following tables. This action cannot be undone. After clearing, the system can maintain a clean state, but all conversations will be lost. Please choose carefully.',
+      clearSuccess: 'All tables cleared successfully',
+      clearFailed: 'Failed to clear tables',
+      refreshSuccess: 'Counts refreshed',
+      refreshFailed: 'Failed to refresh counts',
+      allEmpty: 'All tables are empty',
+      rows: 'rows',
+      tableDescriptions: {
+        actToolInfo:
+          'Tool call details - Stores tool name, parameters (JSON), and execution results. Grows with every tool call.',
+        thinkActRecord:
+          'Think-act cycles - Records each think-act cycle during agent execution, including think input/output, action results, and token counts. Grows with every agent step.',
+        planExecutionRecord:
+          'Plan executions - Tracks high-level plan execution metadata, user requests, and execution summaries. Grows with each plan execution.',
+        agentExecutionRecord:
+          'Agent executions - Records agent execution within plan steps, including agent info, execution state, and results. Grows with each agent invocation.',
+        aiChatMemory:
+          'Chat messages - Stores conversation messages. Grows with each message. This is an alternative storage mechanism alongside the plan-based system.',
+      },
+    },
     // Basic configuration
     basicConfig: {
       title: 'Basic Configuration',
@@ -467,6 +510,12 @@ const words: I18nType = {
         externalLinkedFolder:
           "External Directory Mapping: You can specify an external directory, and the system will map this directory to a subdirectory under each task, so you don't need to import the content. You can use an absolute directory path with or without a trailing slash. The mapped directory can be accessed through the linked_external subdirectory.",
         enableConversationMemory: 'Enable Conversation Memory',
+        enableSmartContentSaving:
+          'When enabled, the system will automatically save all overly long content to files to protect memory from exceeding limits. However, you will need to use file reading tools for subsequent processing.',
+        respectGitIgnore:
+          'Whether to respect .gitignore rules: When enabled, file search (grep) and other operations will automatically ignore files and directories specified in .gitignore files, avoiding searching files that should not be processed (such as node_modules, .git, etc.). It is recommended to keep this enabled.',
+        bashSecurityProtection:
+          'Bash security protection: When enabled, all rm commands will be blocked because files deleted by rm are extremely difficult to recover. If set to false, rm commands will not be blocked. Use with caution. It is recommended to keep this enabled to protect data security.',
       },
       interactionSettings: {
         openBrowser: 'Automatically open the browser on startup',
@@ -475,7 +524,15 @@ const words: I18nType = {
         maxSteps: 'Max Steps',
         userInputTimeout: 'User input form waiting timeout (seconds)',
         maxMemory: 'Maximum number of messages that can be remembered',
+        conversationMemoryMaxChars:
+          'Maximum memory threshold for a single agent. When exceeded, the system will automatically compress memory to keep the memory character count within the current threshold.',
+        executorPoolSize:
+          'Core size of the executor pool, representing the number of func-Agents that can execute in parallel. It is not recommended to set this too large; 3~5 is appropriate. The bottleneck is the rate limiting of parallel calls on the LLM side.',
+        llmReadTimeout:
+          'LLM read request timeout, which is the core timeout for socket connections. Default is 120 seconds.',
         parallelToolCalls: 'Parallel tool calls',
+        maxLinesForFullRead:
+          'Maximum number of lines allowed for full file reads without offset/limit. When a file exceeds this limit, users must use offset/limit parameters or set bypass_limit=true to read the entire file. Default is 1.',
       },
       // infiniteContext: { // TEMPORARILY COMMENTED OUT
       //   enabled: 'Whether to enable infinite context',
@@ -498,11 +555,9 @@ const words: I18nType = {
         imageType: 'Image Type',
         maxRetryAttempts: 'Max Retry Attempts',
       },
-      versionInfo: {
-        title: 'Version Information',
-        version: 'Version',
-        buildTime: 'Build Time',
-        currentTime: 'Current Time',
+      imageGeneration: {
+        modelName:
+          'Model name. Specify the model name for image generation.\n\n【DashScope Wanx Models】\nText-to-Image: wan2.6-t2i, wan2.5-t2i-preview, wan2.2-t2i-plus, wan2.2-t2i-flash, wanx2.1-t2i-plus, wanx2.1-t2i-turbo, wanx2.0-t2i-turbo, wanx-v1\nImage Generation and Editing: wan2.6-image, wan2.5-i2i-preview, wanx2.1-imageedit\nOther Features: wanx-sketch-to-image-lite, wanx-x-painting, wanx-style-repaint-v1, wanx-background-generation-v2, image-out-painting, wanx-virtualmodel, virtualmodel-v2, shoemodel-v1, wanx-poster-generation-v1\n\n【DashScope Qwen Models】\nImage Generation: qwen-image-plus, qwen-image\nImage Editing: qwen-image-edit-plus, qwen-image-edit-plus-2025-10-30, qwen-image-edit',
       },
       systemSettings: {
         systemName: 'System Name',
@@ -593,6 +648,12 @@ const words: I18nType = {
         'This will overwrite existing templates with the same planTemplateId. Continue?',
       invalidFormat: 'Invalid file format. Expected a JSON array of plan templates.',
       loadFailed: 'Failed to load plan templates',
+    },
+    versionInfo: {
+      title: 'Version Information',
+      version: 'Version',
+      buildTime: 'Build Time',
+      currentTime: 'Current Time',
     },
   },
 
@@ -743,6 +804,7 @@ const words: I18nType = {
     thinkingAnalyzing: 'Analyzing task requirements...',
     thinkingExecuting: 'Executing: {title}',
     thinkingResponse: 'Organizing response for you...',
+    waitingForResponse: 'Waiting for response...',
     planningExecution: 'Planning and executing your request...',
     copyResponse: 'Copy Response',
     regenerateResponse: 'Regenerate Response',
@@ -787,6 +849,14 @@ const words: I18nType = {
     userInputRequired: 'User Input Required',
     funcAgentExecutionDetails: 'Func-Agent Execution Details',
     clickToViewExecutionDetails: 'Click to view execution details',
+    currentFuncAgentExecutionRound: 'Current Func-Agent Execution Round: {round}',
+    latestToolInfo: 'Latest Tool Info',
+    roundNumber: 'Round Number',
+    roundLabel: 'Round {round}',
+    methodName: 'Current Method',
+    methodArgs: 'Method Args',
+    userRequest: 'User Request',
+    currentLatestExecutionPlan: 'Current Latest Execution Plan',
   },
 
   // Input component
@@ -879,8 +949,6 @@ const words: I18nType = {
     serviceGroup: 'Service Group',
     organizationMethod: 'Organization',
     organizationLabel: 'Organization:',
-    organizationByTime: 'By Modify Time',
-    organizationByAbc: 'By ABC',
     organizationByGroupTime: 'By Service Group & Time',
     organizationByGroupAbc: 'By Service Group & ABC',
     ungroupedMethods: 'Ungrouped Methods',
@@ -1033,6 +1101,11 @@ const words: I18nType = {
     networkError: 'Network error',
     apiError: 'API call failed',
     resizeHint: 'Drag to resize',
+    cannotSaveNonExistentTools: 'Cannot save plan template: Some tools do not exist.',
+    cannotExecuteNonExistentTools: 'Cannot execute plan: Some tools do not exist.',
+    nonExistentToolsHeader: 'Non-existent tools:',
+    nonExistentToolStep: 'Step {stepNumber}: {toolName}',
+    toolNotExistWarning: 'This tool does not exist and may not be available',
   },
 
   // Tool Selection

@@ -34,8 +34,14 @@
       <!-- Model list -->
       <div class="model-list">
         <div class="list-header">
-          <h3>{{ t('config.modelConfig.configuredModels') }}</h3>
-          <span class="model-count">({{ models.length }})</span>
+          <div>
+            <h3>{{ t('config.modelConfig.configuredModels') }}</h3>
+            <span class="model-count">({{ models.length }})</span>
+          </div>
+          <button class="add-btn" @click="showAddModelModal">
+            <Icon icon="carbon:add" />
+            {{ t('config.modelConfig.createNew') }}
+          </button>
         </div>
 
         <div class="models-container" v-if="!loading">
@@ -74,11 +80,6 @@
           <Icon icon="carbon:bot" class="empty-icon" />
           <p>{{ t('config.modelConfig.noModel') }}</p>
         </div>
-
-        <button class="add-btn" @click="showAddModelModal">
-          <Icon icon="carbon:add" />
-          {{ t('config.modelConfig.createNew') }}
-        </button>
       </div>
 
       <!-- Model details -->
@@ -981,8 +982,15 @@ onMounted(() => {
 .list-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.list-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .list-header h3 {
@@ -1078,16 +1086,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 16px;
+  gap: 6px;
+  padding: 6px 12px;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
   color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   transition: all 0.3s ease;
-  font-size: 14px;
+  font-size: 13px;
+  min-height: 32px;
 
   &:hover {
     background: rgba(255, 255, 255, 0.05);

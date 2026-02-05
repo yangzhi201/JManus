@@ -96,18 +96,6 @@ public interface PlanInterface {
 	void setPlanningThinking(String planningThinking);
 
 	/**
-	 * Get the execution parameters.
-	 * @return The execution parameters
-	 */
-	String getExecutionParams();
-
-	/**
-	 * Set the execution parameters.
-	 * @param executionParams The execution parameters
-	 */
-	void setExecutionParams(String executionParams);
-
-	/**
 	 * Get the flat list of all execution steps.
 	 * @return All execution steps
 	 */

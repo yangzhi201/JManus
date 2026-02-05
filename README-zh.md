@@ -6,6 +6,7 @@
 [![Java](https://img.shields.io/badge/Java-17+-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![GitHub Stars](https://img.shields.io/github/stars/alibaba/spring-ai-alibaba.svg)](https://github.com/alibaba/spring-ai-alibaba/stargazers)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/spring-ai-alibaba/Lynxe)
 
 [English](./README.md) | 🌍 **中文**
 
@@ -18,7 +19,6 @@
 ## ✨ Lynxe 简介（原名：JManus）
 
 Lynxe 是 Manus 的一个 Java 实现，目前已经在阿里巴巴集团内的很多应用都有使用，主要用于处理需要有一定确定性要求的探索性任务，比如，快速从海量数据中找到数据并转换成数据库内的一行数据，或者分析日志并给出告警等。
-
 
 你可以从这里看到我们推荐的一些已经实现好的 Func-Agent 的[使用案例](https://github.com/Lynxe-public/Lynxe-public-prompts)。
 
@@ -47,6 +47,7 @@ Lynxe 也提供了 http 的服务调用能力，适合被集成到既有的项�
 ### 先决条件
 
 - 🌐 **DashScope API 密钥** (或替代的 AI 模型提供商)
+  > 💡 **获取您的 DashScope API 密钥**: 访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/?tab=model#/api-key)，在密钥管理页面创建 API Key 并复制密钥。新用户可享受 100 万 Token 输入和 100 万 Token 输出的免费额度（有效期 90 天）。
 - ☕ **Java 17+** (用于运行 JAR 文件或源码运行) 或 🐳 **Docker** (用于容器化部署)
 
 ### 方式一：使用 GitHub Release (推荐)
@@ -70,7 +71,7 @@ java -jar lynxe.jar
 
 应用启动后，在浏览器中访问 `http://localhost:18080`。
 
-> 💡 **引导式设置**: 应用启动后会自动显示引导页面。在第一个页面选择中英文语言，然后在第二个页面输入您刚才申请的 DashScope API 密钥即可完成配置。
+> 💡 **引导式设置**: 应用启动后会自动显示引导页面。在第一个页面选择中英文语言，然后在第二个页面输入您的 DashScope API 密钥完成配置。新用户可享受 100 万 Token 输入和 100 万 Token 输出的免费额度（有效期 90 天）。访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/?tab=model#/api-key) 获取免费 API 密钥。
 
 🎉 **恭喜!** 您的多 Agent 系统现已快速启动完成。 你可以访问https://github.com/talk-flow/public-usecase 去做一些我们认为比较有效的实践。
 
@@ -124,7 +125,7 @@ docker run -d \
 
 容器启动后，在浏览器中访问 `http://localhost:18080`。
 
-> 💡 **引导式设置**: 应用启动后会自动显示引导页面。在第一个页面选择中英文语言，然后在第二个页面输入您刚才申请的 DashScope API 密钥即可完成配置。
+> 💡 **引导式设置**: 应用启动后会自动显示引导页面。在第一个页面选择中英文语言，然后在第二个页面输入您的 DashScope API 密钥完成配置。新用户可享受 100 万 Token 输入和 100 万 Token 输出的免费额度（有效期 90 天）。访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/?tab=model#/api-key) 获取免费 API 密钥。
 
 #### 📋 常用 Docker 命令
 
@@ -157,7 +158,7 @@ cd Lynxe
 
 #### 2. 数据库配置（可选）
 
-> 💡 **获取您的 DashScope API 密钥**: 访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/?tab=model#/api-key) 获取免费 API 密钥。
+> 💡 **获取您的 DashScope API 密钥**: 访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/?tab=model#/api-key)，在密钥管理页面创建 API Key 并复制密钥。运行 JAR 文件后，在浏览器中访问 `http://localhost:18080`，在引导页面输入您的 DashScope API 密钥完成配置。新用户可享受 100 万 Token 输入和 100 万 Token 输出的免费额度（有效期 90 天）。
 >
 > **使用其他提供商?** 在 `src/main/resources/application.yml` 中更新配置，以使用您偏好的 AI 模型平台。
 

@@ -14,22 +14,24 @@
  * limitations under the License.
  */
 
+import { useTaskStop } from '@/composables/useTaskStop'
+import { useMessageDialogSingleton } from '@/composables/useMessageDialog'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { useTaskStop } from '@/composables/useTaskStop'
 
 export interface TaskPayload {
   prompt: string
   timestamp: number
   processed?: boolean
-  planId?: string
-  isRunning?: boolean
+  planId?: string | undefined
+  // Removed isRunning field - now computed from planId and messageDialog.isRunning
 }
 
 export const useTaskStore = defineStore('task', () => {
   const currentTask = ref<TaskPayload | null>(null)
   const taskToInput = ref<string>('')
   const hasVisitedHome = ref(false)
+  const messageDialog = useMessageDialogSingleton()
 
   // Set new task
   const setTask = (prompt: string) => {
@@ -126,6 +128,7 @@ export const useTaskStore = defineStore('task', () => {
   }
 
   // Set task as running with plan ID
+  // Note: isRunning is now computed from planId and messageDialog.isRunning
   const setTaskRunning = (planId: string) => {
     console.log('[TaskStore] setTaskRunning called with planId:', planId)
     // Create a task if none exists, or update existing one
@@ -136,12 +139,10 @@ export const useTaskStore = defineStore('task', () => {
         timestamp: Date.now(),
         processed: false,
         planId: planId,
-        isRunning: true,
       }
       console.log('[TaskStore] Created new task for running state:', currentTask.value)
     } else {
       currentTask.value.planId = planId
-      currentTask.value.isRunning = true
       console.log('[TaskStore] Updated existing task:', currentTask.value)
     }
   }
@@ -150,17 +151,18 @@ export const useTaskStore = defineStore('task', () => {
   // Uses shared stop logic from useTaskStop composable
   const stopCurrentTask = async () => {
     console.log('[TaskStore] stopCurrentTask called')
-    if (currentTask.value && currentTask.value.isRunning && currentTask.value.planId) {
+    if (currentTask.value?.planId) {
       // Use shared stop logic from composable
       const { stopTask } = useTaskStop()
-      return await stopTask(currentTask.value.planId, true)
+      return await stopTask(currentTask.value.planId)
     }
     return false
   }
 
   // Check if there's a running task
+  // Now computed from planId and messageDialog.isRunning
   const hasRunningTask = () => {
-    const result = currentTask.value && currentTask.value.isRunning
+    const result = !!(currentTask.value?.planId && messageDialog.isRunning.value)
     console.log('[TaskStore] hasRunningTask check - result:', result)
     return result
   }

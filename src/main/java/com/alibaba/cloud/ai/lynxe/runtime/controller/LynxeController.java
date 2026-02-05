@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
@@ -51,6 +52,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.alibaba.cloud.ai.lynxe.config.LynxeProperties;
@@ -60,6 +62,8 @@ import com.alibaba.cloud.ai.lynxe.event.PlanExceptionEvent;
 import com.alibaba.cloud.ai.lynxe.exception.PlanException;
 import com.alibaba.cloud.ai.lynxe.llm.LlmService;
 import com.alibaba.cloud.ai.lynxe.llm.StreamingResponseHandler;
+import com.alibaba.cloud.ai.lynxe.llm.TokenCountService;
+import com.alibaba.cloud.ai.lynxe.llm.TokenLimitService;
 import com.alibaba.cloud.ai.lynxe.planning.exception.ParameterValidationException;
 import com.alibaba.cloud.ai.lynxe.planning.service.IPlanParameterMappingService;
 import com.alibaba.cloud.ai.lynxe.planning.service.PlanTemplateConfigService;
@@ -91,6 +95,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
 @RestController
@@ -149,11 +154,20 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 	@Lazy
 	private StreamingResponseHandler streamingResponseHandler;
 
+	@Autowired(required = false)
+	private TokenCountService tokenCountService;
+
+	@Autowired(required = false)
+	private TokenLimitService tokenLimitService;
+
 	@Autowired
 	private com.alibaba.cloud.ai.lynxe.runtime.service.FileUploadService fileUploadService;
 
 	@Autowired
 	private com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager unifiedDirectoryManager;
+
+	// Store active chat stream subscriptions for cancellation (key: streamId)
+	private final Map<String, Disposable> activeChatStreams = new ConcurrentHashMap<>();
 
 	public LynxeController(ObjectMapper objectMapper) {
 		this.objectMapper = objectMapper;
@@ -708,7 +722,9 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 				return ResponseEntity.notFound().build();
 			}
 
-			logger.info("Successfully retrieved agent execution detail for stepId: {}", stepId);
+			String json = objectMapper.writeValueAsString(detail);
+			logger.info("Successfully retrieved agent execution detail for stepId: {} with json: {}", stepId, json);
+
 			return ResponseEntity.ok(detail);
 		}
 		catch (Exception e) {
@@ -837,6 +853,62 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 	 * @param planId The plan ID to stop
 	 * @return Response indicating success or failure
 	 */
+	/**
+	 * Cancel an active chat stream by conversationId and streamId Uses database-driven
+	 * cancellation for multi-machine support
+	 * @param conversationId The conversation ID
+	 * @param streamId The stream ID
+	 * @return ResponseEntity with cancellation status
+	 */
+	@PostMapping("/chat/{conversationId}/{streamId}/cancel")
+	public ResponseEntity<Map<String, Object>> cancelChatStream(@PathVariable("conversationId") String conversationId,
+			@PathVariable("streamId") String streamId) {
+		try {
+			logger.info("Received cancel chat stream request for conversationId: {}, streamId: {}", conversationId,
+					streamId);
+
+			// Construct composite rootPlanId (same format as used in /chat endpoint)
+			String compositeRootPlanId = "chat-" + conversationId + "-" + streamId;
+
+			// Check if stream exists in database
+			boolean streamExists = rootTaskManagerService.taskExists(compositeRootPlanId);
+			if (!streamExists) {
+				logger.warn("No active stream found for conversationId: {}, streamId: {}", conversationId, streamId);
+				return ResponseEntity.badRequest()
+					.body(Map.of("error", "No active stream found for the given conversationId and streamId",
+							"conversationId", conversationId, "streamId", streamId));
+			}
+
+			// Mark stream for cancellation in database (database-driven interruption)
+			boolean streamMarkedForCancel = taskInterruptionManager.stopTask(compositeRootPlanId);
+
+			// Also try to dispose subscription immediately if on same machine
+			Disposable subscription = activeChatStreams.get(streamId);
+			if (subscription != null && !subscription.isDisposed()) {
+				logger.info("Disposing subscription immediately for streamId: {}", streamId);
+				subscription.dispose();
+			}
+
+			if (streamMarkedForCancel) {
+				rootTaskManagerService.updateTaskResult(compositeRootPlanId, "Chat stream cancelled by user");
+			}
+
+			logger.info("Successfully marked chat stream for cancellation: conversationId={}, streamId={}",
+					conversationId, streamId);
+			return ResponseEntity.ok(Map.of("status", "cancelled", "conversationId", conversationId, "streamId",
+					streamId, "message", "Chat stream cancellation request processed successfully",
+					"streamMarkedForCancel", streamMarkedForCancel));
+
+		}
+		catch (Exception e) {
+			logger.error("Failed to cancel chat stream for conversationId: {}, streamId: {}", conversationId, streamId,
+					e);
+			return ResponseEntity.internalServerError()
+				.body(Map.of("error", "Failed to cancel chat stream: " + e.getMessage(), "conversationId",
+						conversationId, "streamId", streamId));
+		}
+	}
+
 	@PostMapping("/stopTask/{planId}")
 	public ResponseEntity<Map<String, Object>> stopTask(@PathVariable("planId") String planId) {
 		try {
@@ -958,6 +1030,32 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 			logger.debug("Using provided conversation ID: {} (source: {})", conversationId, requestSource);
 		}
 		return conversationId;
+	}
+
+	/**
+	 * Clean up chat stream resources (database entry and memory map)
+	 * @param streamId The stream ID
+	 * @param subscription The Disposable subscription (can be null)
+	 */
+	private void cleanupChatStream(String streamId, Disposable subscription) {
+		try {
+			// Remove from memory map
+			if (streamId != null) {
+				Disposable removed = activeChatStreams.remove(streamId);
+				if (removed != null) {
+					logger.debug("Removed streamId {} from activeChatStreams map", streamId);
+				}
+			}
+
+			// Dispose subscription if not already disposed
+			if (subscription != null && !subscription.isDisposed()) {
+				subscription.dispose();
+				logger.debug("Disposed subscription for streamId: {}", streamId);
+			}
+		}
+		catch (Exception e) {
+			logger.warn("Error during chat stream cleanup for streamId: {}", streamId, e);
+		}
 	}
 
 	/**
@@ -1211,14 +1309,14 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 			com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult result = switch (extension) {
 				case "pdf" -> {
 					if (pdfProcessor != null) {
-						yield pdfProcessor.convertToMarkdown(filePath, null, planId, false);
+						yield pdfProcessor.convertToMarkdown(filePath, null, planId, false, null);
 					}
 					yield null;
 				}
 				case "jpg", "jpeg", "png", "gif" -> {
 					if (imageProcessor != null) {
 						String markdownFilename = generateMarkdownFilename(filename);
-						yield imageProcessor.convertImageToTextWithOcr(filePath, null, planId, markdownFilename);
+						yield imageProcessor.convertImageToTextWithOcr(filePath, null, planId, markdownFilename, null);
 					}
 					yield null;
 				}
@@ -1332,29 +1430,54 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 		RequestSource requestSource = getRequestSource(request);
 		logger.info("📡 [{}] Received chat streaming request", requestSource.name());
 
+		// Generate unique streamId for this SSE stream
+		String streamId = "chat-" + System.currentTimeMillis() + "-" + (int) (Math.random() * 10000);
+		logger.info("Generated streamId: {}", streamId);
+
 		// Create SSE emitter with 5 minute timeout
 		SseEmitter emitter = new SseEmitter(300000L);
 		StringBuilder accumulatedText = new StringBuilder();
-
-		// Register timeout and error handlers before starting async task to avoid race
-		// condition
-		emitter.onTimeout(() -> {
-			logger.warn("SSE emitter timeout");
-			emitter.complete();
-		});
-
-		emitter.onError((ex) -> {
-			logger.error("SSE emitter error", ex);
-			emitter.completeWithError(ex);
-		});
-
-		// Store input for use in completion handler
-		final String userInput = input;
 
 		// Store variables for use in completion handler (using arrays to allow
 		// modification in lambda)
 		final String[] conversationIdHolder = new String[1];
 		final long[] chatStartTimeHolder = new long[1];
+		final UserMessage[] userMessageHolder = new UserMessage[1];
+		final Disposable[] subscriptionHolder = new Disposable[1];
+
+		// Register timeout and error handlers before starting async task to avoid race
+		// condition
+		emitter.onTimeout(() -> {
+			logger.warn("SSE emitter timeout for streamId: {}", streamId);
+			cleanupChatStream(streamId, subscriptionHolder[0]);
+			emitter.complete();
+		});
+
+		emitter.onError((ex) -> {
+			// Check if this is a client disconnection (expected behavior)
+			if (ex instanceof AsyncRequestNotUsableException) {
+				// Client disconnected - this is normal, log at INFO level
+				logger.info("Client disconnected for SSE stream streamId: {}", streamId);
+			}
+			else if (ex instanceof IOException && ex.getMessage() != null && ex.getMessage().contains("Broken pipe")) {
+				// Broken pipe due to client disconnection - also normal
+				logger.info("Client disconnected (broken pipe) for SSE stream streamId: {}", streamId);
+			}
+			else {
+				// Real error - log at ERROR level
+				logger.error("SSE emitter error for streamId: {}", streamId, ex);
+			}
+			cleanupChatStream(streamId, subscriptionHolder[0]);
+			emitter.completeWithError(ex);
+		});
+
+		emitter.onCompletion(() -> {
+			logger.info("SSE emitter completed for streamId: {}", streamId);
+			cleanupChatStream(streamId, subscriptionHolder[0]);
+		});
+
+		// Store input for use in completion handler
+		final String userInput = input;
 
 		// Execute asynchronously
 		CompletableFuture.runAsync(() -> {
@@ -1366,10 +1489,24 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 				// Record start time for chat ID generation
 				chatStartTimeHolder[0] = System.currentTimeMillis();
 
-				// Send initial event with conversationId
+				// Create database entry for stream tracking (for multi-machine
+				// cancellation)
+				final String compositeRootPlanId = "chat-" + conversationId + "-" + streamId;
+				try {
+					rootTaskManagerService.createOrUpdateTask(compositeRootPlanId,
+							RootTaskManagerEntity.DesiredTaskState.START);
+					logger.info("Created database entry for chat stream: {}", compositeRootPlanId);
+				}
+				catch (Exception e) {
+					logger.warn("Failed to create database entry for stream tracking: {}", e.getMessage());
+					// Continue execution even if DB entry creation fails
+				}
+
+				// Send initial event with conversationId and streamId
 				Map<String, Object> startData = new HashMap<>();
 				startData.put("type", "start");
 				startData.put("conversationId", conversationId);
+				startData.put("streamId", streamId);
 				emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(startData)));
 
 				// Build message list with conversation history
@@ -1399,40 +1536,104 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 				// Add user message with multi-media support
 				UserMessage userMessage = createUserMessageWithMedia(input, request);
 				messages.add(userMessage);
-
-				// Save user message to conversation memory
-				if (lynxeProperties != null && lynxeProperties.getEnableConversationMemory() && conversationId != null
-						&& !conversationId.trim().isEmpty()) {
-					try {
-						llmService.addToConversationMemoryWithLimit(lynxeProperties.getMaxMemory(), conversationId,
-								userMessage);
-						logger.debug("Saved user message to conversation memory for conversationId: {}",
-								conversationId);
-					}
-					catch (Exception e) {
-						logger.warn("Failed to save user message to conversation memory for conversationId: {}",
-								conversationId, e);
-					}
-				}
+				// Store userMessage for use in completion handler
+				userMessageHolder[0] = userMessage;
 
 				// Call LLM with simple chat (no tools, no plan execution)
 				ChatClient chatClient = llmService.getDiaChatClient();
 				Prompt prompt = new Prompt(messages);
 
-				// Calculate input character count
-				int inputCharCount = messages.stream().mapToInt(message -> {
-					String text = message.getText();
-					return (text != null && !text.trim().isEmpty()) ? text.length() : 0;
-				}).sum();
-				logger.info("Chat input character count: {}", inputCharCount);
+				// Calculate input token count and check limits
+				int inputTokenCount = 0;
+				if (tokenCountService != null) {
+					inputTokenCount = tokenCountService.countTokens(messages);
+					logger.info("Chat input token count: {}", inputTokenCount);
+
+					// Get model name for limit checking
+					String modelName = llmService.getDefaultModelName();
+					if (modelName != null && tokenLimitService != null && lynxeProperties != null) {
+						// Get model context limit
+						int modelContextLimit = tokenLimitService.getContextLimit(modelName);
+
+						// Use model context limit only (no sessionTokenLimit)
+						int effectiveLimit = modelContextLimit;
+
+						// Check if token count exceeds limit
+						if (inputTokenCount > effectiveLimit) {
+							String errorMessage = String.format(
+									"Token limit exceeded: current=%d, limit=%d, model=%s. Please reduce the input size or clear conversation history.",
+									inputTokenCount, effectiveLimit, modelName);
+							logger.warn(errorMessage);
+
+							// Send error event via SSE
+							Map<String, Object> errorData = new HashMap<>();
+							errorData.put("type", "error");
+							errorData.put("message", errorMessage);
+							errorData.put("currentTokens", inputTokenCount);
+							errorData.put("limit", effectiveLimit);
+							emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(errorData)));
+							emitter.complete();
+							return;
+						}
+
+						// Log warning if approaching limit (80% threshold)
+						if (effectiveLimit > 0 && inputTokenCount > effectiveLimit * 0.8) {
+							logger.warn("Token count ({}) is approaching limit ({}) for model {}", inputTokenCount,
+									effectiveLimit, modelName);
+						}
+					}
+				}
+				else {
+					// Fallback to approximate token estimation if token service not
+					// available
+					inputTokenCount = messages.stream().mapToInt(message -> {
+						String text = message.getText();
+						if (text != null && !text.trim().isEmpty()) {
+							// Approximate: 1 token ≈ 4 characters
+							return (int) Math.ceil(text.length() / 4.0);
+						}
+						return 0;
+					}).sum();
+					logger.info("Chat input token count (estimated): {} (TokenCountService not available)",
+							inputTokenCount);
+				}
 
 				// Process streaming response and send chunks as they arrive
 				ChatClient.ChatClientRequestSpec requestSpec = chatClient.prompt(prompt);
 				Flux<ChatResponse> responseFlux = requestSpec.stream().chatResponse();
 
 				// Subscribe to flux and send chunks via SSE
-				responseFlux.doOnNext(chatResponse -> {
+				Disposable subscription = responseFlux.doOnNext(chatResponse -> {
 					try {
+						// Check for cancellation before processing each chunk
+						// (multi-machine support)
+						if (taskInterruptionManager.shouldInterruptTask(compositeRootPlanId)) {
+							logger.info("Chat stream {} cancelled via database state", streamId);
+							// Dispose subscription to stop Flux
+							if (subscriptionHolder[0] != null && !subscriptionHolder[0].isDisposed()) {
+								subscriptionHolder[0].dispose();
+							}
+
+							// Clean up database entry
+							try {
+								rootTaskManagerService.completeTask(compositeRootPlanId, "Stream cancelled by user",
+										false);
+								logger.debug("Marked chat stream as cancelled in database: {}", compositeRootPlanId);
+							}
+							catch (Exception e) {
+								logger.warn("Failed to update database entry on cancellation: {}", e.getMessage());
+							}
+
+							// Send cancellation event
+							Map<String, Object> cancelledData = new HashMap<>();
+							cancelledData.put("type", "cancelled");
+							cancelledData.put("message", "Stream cancelled by user");
+							emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(cancelledData)));
+							emitter.complete();
+							cleanupChatStream(streamId, subscriptionHolder[0]);
+							return;
+						}
+
 						if (chatResponse.getResult() != null && chatResponse.getResult().getOutput() != null) {
 							String text = chatResponse.getResult().getOutput().getText();
 							if (text != null && !text.isEmpty()) {
@@ -1446,9 +1647,20 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 							}
 						}
 					}
-					catch (Exception e) {
-						logger.error("Error sending SSE chunk", e);
+					catch (IOException e) {
+						// Client disconnected
+						logger.info("Client disconnected for streamId: {}", streamId);
+						if (subscriptionHolder[0] != null && !subscriptionHolder[0].isDisposed()) {
+							subscriptionHolder[0].dispose();
+						}
+						cleanupChatStream(streamId, subscriptionHolder[0]);
 					}
+					catch (Exception e) {
+						logger.error("Error sending SSE chunk for streamId: {}", streamId, e);
+					}
+				}).doOnCancel(() -> {
+					logger.info("Flux subscription cancelled for streamId: {}", streamId);
+					cleanupChatStream(streamId, subscriptionHolder[0]);
 				}).doOnComplete(() -> {
 					try {
 						String finalText = accumulatedText.toString();
@@ -1459,6 +1671,36 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 						// Get conversationId and chatStartTime from holders
 						String currentConversationId = conversationIdHolder[0];
 						long currentChatStartTime = chatStartTimeHolder[0];
+						UserMessage currentUserMessage = userMessageHolder[0];
+
+						// Clean up database entry on completion
+						try {
+							rootTaskManagerService.completeTask(compositeRootPlanId, finalText, true);
+							logger.debug("Marked chat stream as completed in database: {}", compositeRootPlanId);
+						}
+						catch (Exception e) {
+							logger.warn("Failed to update database entry on completion: {}", e.getMessage());
+						}
+
+						// Save user message and assistant response to conversation memory
+						// Only save when the whole execution is completed
+						if (lynxeProperties != null && lynxeProperties.getEnableConversationMemory()
+								&& currentConversationId != null && !currentConversationId.trim().isEmpty()) {
+							// Save user message first
+							if (currentUserMessage != null) {
+								try {
+									llmService.addToConversationMemoryWithLimit(lynxeProperties.getMaxMemory(),
+											currentConversationId, currentUserMessage);
+									logger.debug("Saved user message to conversation memory for conversationId: {}",
+											currentConversationId);
+								}
+								catch (Exception e) {
+									logger.warn(
+											"Failed to save user message to conversation memory for conversationId: {}",
+											currentConversationId, e);
+								}
+							}
+						}
 
 						// Save assistant response to conversation memory
 						if (lynxeProperties != null && lynxeProperties.getEnableConversationMemory()
@@ -1512,16 +1754,32 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 						emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(doneData)));
 						emitter.complete();
 
-						logger.info("Chat streaming completed for conversationId: {}, response length: {}",
-								conversationId, finalText.length());
+						logger.info(
+								"Chat streaming completed for conversationId: {}, streamId: {}, response length: {}",
+								conversationId, streamId, finalText.length());
 					}
 					catch (Exception e) {
-						logger.error("Error completing SSE stream", e);
+						logger.error("Error completing SSE stream for streamId: {}", streamId, e);
 						emitter.completeWithError(e);
 					}
+					finally {
+						cleanupChatStream(streamId, subscriptionHolder[0]);
+					}
 				}).doOnError(error -> {
-					logger.error("Error in chat streaming", error);
+					logger.error("Error in chat streaming for streamId: {}", streamId, error);
 					try {
+						// Clean up database entry on error
+						try {
+							rootTaskManagerService.completeTask(compositeRootPlanId,
+									"Stream error: "
+											+ (error.getMessage() != null ? error.getMessage() : "Unknown error"),
+									false);
+							logger.debug("Marked chat stream as failed in database: {}", compositeRootPlanId);
+						}
+						catch (Exception e) {
+							logger.warn("Failed to update database entry on error: {}", e.getMessage());
+						}
+
 						Map<String, Object> errorData = new HashMap<>();
 						errorData.put("type", "error");
 						errorData.put("message",
@@ -1532,11 +1790,22 @@ public class LynxeController implements LynxeListener<PlanExceptionEvent> {
 					catch (Exception e) {
 						emitter.completeWithError(e);
 					}
+					finally {
+						cleanupChatStream(streamId, subscriptionHolder[0]);
+					}
 				}).subscribe();
+
+				// Store subscription for cancellation
+				subscriptionHolder[0] = subscription;
+				activeChatStreams.put(streamId, subscription);
+				logger.info("Stored subscription for streamId: {}", streamId);
 
 			}
 			catch (Exception e) {
-				logger.error("Failed to process chat streaming request", e);
+				logger.error("Failed to process chat streaming request for streamId: {}", streamId, e);
+				// Ensure cleanup even if exception occurs (cleanupChatStream is
+				// idempotent)
+				cleanupChatStream(streamId, subscriptionHolder[0]);
 				try {
 					Map<String, Object> errorData = new HashMap<>();
 					errorData.put("type", "error");

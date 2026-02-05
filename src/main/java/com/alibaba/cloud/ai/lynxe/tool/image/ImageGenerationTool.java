@@ -22,24 +22,17 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.image.ImageGeneration;
-import org.springframework.ai.image.ImageModel;
-import org.springframework.ai.image.ImagePrompt;
-import org.springframework.ai.image.ImageResponse;
-import org.springframework.ai.model.SimpleApiKey;
-import org.springframework.ai.openai.OpenAiImageModel;
-import org.springframework.ai.openai.OpenAiImageOptions;
-import org.springframework.ai.openai.api.OpenAiImageApi;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
+import com.alibaba.cloud.ai.lynxe.config.LynxeProperties;
 import com.alibaba.cloud.ai.lynxe.model.entity.DynamicModelEntity;
 import com.alibaba.cloud.ai.lynxe.model.repository.DynamicModelRepository;
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,23 +50,30 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 
 	private final ToolI18nService toolI18nService;
 
+	private final LynxeProperties lynxeProperties;
+
+	private final List<ImageGenerationProvider> imageGenerationProviders;
+
 	public ImageGenerationTool(DynamicModelRepository dynamicModelRepository,
 			ObjectProvider<RestClient.Builder> restClientBuilderProvider, ObjectMapper objectMapper,
-			ToolI18nService toolI18nService) {
+			ToolI18nService toolI18nService, LynxeProperties lynxeProperties,
+			List<ImageGenerationProvider> imageGenerationProviders) {
 		this.dynamicModelRepository = dynamicModelRepository;
 		this.restClientBuilderProvider = restClientBuilderProvider;
 		this.objectMapper = objectMapper;
 		this.toolI18nService = toolI18nService;
+		this.lynxeProperties = lynxeProperties;
+		this.imageGenerationProviders = imageGenerationProviders != null ? imageGenerationProviders : List.of();
 	}
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "image";
 	}
 
 	@Override
 	public String getName() {
-		return "image_generate";
+		return "image-generate";
 	}
 
 	@Override
@@ -98,110 +98,53 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 				request != null ? request.getSize() : null, request != null ? request.getQuality() : null,
 				request != null ? request.getN() : null);
 
+		DynamicModelEntity modelEntity = null;
 		try {
 			// Validate prompt
 			if (request == null || request.getPrompt() == null || request.getPrompt().trim().isEmpty()) {
 				return new ToolExecuteResult("Prompt is required for image generation");
 			}
 
+			// Use configured model name if model in request is null
+			String modelName = request.getModel();
+			if (modelName == null || modelName.trim().isEmpty()) {
+				modelName = getConfiguredModelName();
+				log.debug("Model not specified in request, using configured model name: {}", modelName);
+			}
+
 			// Get model configuration
-			DynamicModelEntity modelEntity = getModelEntity(request.getModel());
+			modelEntity = getModelEntity(modelName);
 			if (modelEntity == null) {
 				return new ToolExecuteResult("Model configuration not found. Please configure a model first.");
 			}
-			// Create ImageModel directly (similar to how PdfOcrProcessor uses ChatClient)
-			ImageModel imageModel = createImageModel(modelEntity);
 
-			// Build OpenAiImageOptions
-			OpenAiImageOptions.Builder optionsBuilder = OpenAiImageOptions.builder();
-			if (request.getModel() != null) {
-				optionsBuilder.model(request.getModel());
-			}
-			if (request.getSize() != null) {
-				// Parse size string (e.g., "1024x1024") into width and height
-				String[] dimensions = request.getSize().split("x");
-				if (dimensions.length == 2) {
-					try {
-						int width = Integer.parseInt(dimensions[0]);
-						int height = Integer.parseInt(dimensions[1]);
-						optionsBuilder.width(width).height(height);
-					}
-					catch (NumberFormatException e) {
-						log.warn("Invalid size format: {}, using default 1024x1024", request.getSize());
-						optionsBuilder.width(1024).height(1024);
-					}
-				}
-				else {
-					optionsBuilder.width(1024).height(1024); // Default
-				}
-			}
-			else {
-				optionsBuilder.width(1024).height(1024);
-			}
-			if (request.getQuality() != null) {
-				optionsBuilder.quality(request.getQuality());
-			}
-			else {
-				optionsBuilder.quality("standard"); // Default
-			}
-			if (request.getN() != null && request.getN() > 1) {
-				optionsBuilder.N(request.getN());
-			}
-
-			OpenAiImageOptions options = optionsBuilder.build();
-
-			// Create ImagePrompt and call ImageModel
-			ImagePrompt imagePrompt = new ImagePrompt(request.getPrompt(), options);
-			ImageResponse response = imageModel.call(imagePrompt);
-
-			// Extract image results
-			// In Spring AI 1.0.1, getResults() returns List<ImageGeneration>
-			List<ImageGeneration> results = response.getResults();
-			if (results == null || results.isEmpty()) {
-				return new ToolExecuteResult("No image generated in response");
-			}
-
-			// Extract image URLs from results
-			// In Spring AI 1.0.1, ImageGeneration.getOutput() returns an object with
-			// getUrl() method
-			List<String> imageUrls = new ArrayList<>();
-			for (ImageGeneration generation : results) {
-				// getOutput() returns the image data which has getUrl() method
-				Object output = generation.getOutput();
-				if (output != null) {
-					// Based on Spring AI 1.0.1 API documentation, output should have
-					// getUrl() method
-					// We'll use a safe approach to extract the URL
-					String imageUrl = extractImageUrl(output);
-					if (imageUrl != null && !imageUrl.isEmpty()) {
-						imageUrls.add(imageUrl);
-					}
+			// Try to find a provider that supports this model
+			ImageGenerationProvider provider = null;
+			for (ImageGenerationProvider p : imageGenerationProviders) {
+				if (p.supports(modelEntity, modelName)) {
+					provider = p;
+					log.info("Found image generation provider for model: {} - {}", modelName,
+							p.getClass().getSimpleName());
+					break;
 				}
 			}
 
-			if (imageUrls.isEmpty()) {
-				return new ToolExecuteResult("No image URLs found in response");
+			// If provider found, use it
+			if (provider != null) {
+				return provider.generateImage(request, modelEntity, modelName, getRootPlanId());
 			}
 
-			// Return result as JSON string
-			Map<String, Object> resultMap = new HashMap<>();
-			resultMap.put("images", imageUrls);
-			resultMap.put("count", imageUrls.size());
-			resultMap.put("prompt", request.getPrompt());
-			if (request.getModel() != null) {
-				resultMap.put("model", request.getModel());
-			}
-			if (request.getSize() != null) {
-				resultMap.put("size", request.getSize());
-			}
-			if (request.getQuality() != null) {
-				resultMap.put("quality", request.getQuality());
+			// Fallback to Google Direct API if supported
+			if (isGoogleDirectApiGeneration(modelEntity)) {
+				log.info("Using direct Google API image generation for model: {}", modelName);
+				return generateImageViaGoogleDirectApi(request, modelEntity, modelName);
 			}
 
-			String resultJson = objectMapper.writeValueAsString(resultMap);
-			log.info("Image generation successful: {} image(s) generated", imageUrls.size());
-			return new ToolExecuteResult(resultJson);
-
+			// No provider found
+			log.warn("Image generation not supported for this model configuration. Model: {}, BaseUrl: {}", modelName,
+					modelEntity.getBaseUrl());
+			return new ToolExecuteResult(
+					"Image generation is not supported for this model. Please configure a supported image generation provider.");
 		}
 		catch (IllegalArgumentException e) {
 			log.error("Invalid argument in image generation: {}", e.getMessage(), e);
@@ -209,24 +152,199 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 		}
 		catch (RuntimeException e) {
 			log.error("Runtime error during image generation: {}", e.getMessage(), e);
-			// Include root cause if available
-			Throwable cause = e.getCause();
-			String errorMessage = "Image generation failed: " + e.getMessage();
-			if (cause != null && cause.getMessage() != null) {
-				errorMessage += " (Cause: " + cause.getMessage() + ")";
-			}
+			// Enhanced error message for HTML response errors
+			String errorMessage = buildEnhancedErrorMessage((Exception) e, modelEntity);
 			return new ToolExecuteResult(errorMessage);
 		}
 		catch (Exception e) {
 			log.error("Unexpected error during image generation: {}", e.getMessage(), e);
-			// Include root cause if available
-			Throwable cause = e.getCause();
-			String errorMessage = "Image generation failed: " + e.getMessage();
-			if (cause != null && cause.getMessage() != null) {
-				errorMessage += " (Cause: " + cause.getMessage() + ")";
-			}
+			// Enhanced error message for HTML response errors
+			String errorMessage = buildEnhancedErrorMessage(e, modelEntity);
 			return new ToolExecuteResult(errorMessage);
 		}
+	}
+
+	/**
+	 * Generate image using direct Google Generative Language API
+	 * @param request Image generation request
+	 * @param modelEntity Model entity configuration
+	 * @param modelName Model name
+	 * @return Tool execution result with image URLs (base64 data URLs)
+	 */
+	private ToolExecuteResult generateImageViaGoogleDirectApi(ImageGenerationRequest request,
+			DynamicModelEntity modelEntity, String modelName) {
+		try {
+			// Validate API key
+			String apiKey = modelEntity.getApiKey();
+			if (apiKey == null || apiKey.trim().isEmpty()) {
+				throw new IllegalArgumentException("API key is required for Google API");
+			}
+
+			// Get base URL from model entity or use default
+			String baseUrl = AbstractBaseTool.normalizeBaseUrl(modelEntity.getBaseUrl());
+			if (baseUrl == null || baseUrl.trim().isEmpty()) {
+				baseUrl = "https://generativelanguage.googleapis.com";
+			}
+
+			// Map model name to Google API format
+			String googleModelName = mapToGoogleModelName(modelName);
+
+			// Build request body in Google's format
+			Map<String, Object> requestBody = new HashMap<>();
+			Map<String, Object> contents = Map.of("role", "user", "parts",
+					List.of(Map.of("text", request.getPrompt())));
+			requestBody.put("contents", List.of(contents));
+
+			// Add generation config with response modalities
+			Map<String, Object> generationConfig = new HashMap<>();
+			generationConfig.put("responseModalities", List.of("TEXT", "IMAGE"));
+			requestBody.put("generationConfig", generationConfig);
+
+			// Log the request JSON for debugging
+			try {
+				String jsonRequest = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(requestBody);
+				log.debug("Google API Request JSON:\n{}", jsonRequest);
+			}
+			catch (Exception e) {
+				log.warn("Failed to serialize request for logging: {}", e.getMessage());
+			}
+
+			// Create RestClient with Google API configuration
+			RestClient.Builder restClientBuilder = restClientBuilderProvider.getIfAvailable(RestClient::builder);
+			RestClient restClient;
+			if (restClientBuilder != null) {
+				restClient = restClientBuilder.clone()
+					.baseUrl(baseUrl)
+					.defaultHeader("x-goog-api-key", apiKey)
+					.defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+					.defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+					.build();
+			}
+			else {
+				restClient = RestClient.builder()
+					.baseUrl(baseUrl)
+					.defaultHeader("x-goog-api-key", apiKey)
+					.defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+					.defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+					.build();
+			}
+
+			// Build API endpoint
+			String endpoint = "/v1beta/models/" + googleModelName + ":generateContent";
+			log.debug("Calling Google API: {}{}", baseUrl, endpoint);
+
+			// Make the API call
+			String responseJson = restClient.post().uri(endpoint).body(requestBody).retrieve().body(String.class);
+
+			if (responseJson == null || responseJson.trim().isEmpty()) {
+				return new ToolExecuteResult("No response received from Google API");
+			}
+
+			log.debug("Google API Response received (length: {} characters)", responseJson.length());
+
+			// Extract images from response
+			List<String> imageUrls = extractImagesFromGoogleResponse(responseJson);
+
+			if (imageUrls.isEmpty()) {
+				// Check if there's an error in the response
+				try {
+					@SuppressWarnings("unchecked")
+					Map<String, Object> responseMap = objectMapper.readValue(responseJson, Map.class);
+					Object error = responseMap.get("error");
+					if (error != null) {
+						String errorMsg = error.toString();
+						log.error("Google API returned error: {}", errorMsg);
+						return new ToolExecuteResult("Google API error: " + errorMsg);
+					}
+				}
+				catch (Exception e) {
+					log.debug("Failed to parse error from response: {}", e.getMessage());
+				}
+				return new ToolExecuteResult("No images found in Google API response");
+			}
+
+			// Return result as JSON string
+			Map<String, Object> resultMap = new HashMap<>();
+			resultMap.put("images", imageUrls);
+			resultMap.put("count", imageUrls.size());
+			resultMap.put("prompt", request.getPrompt());
+			if (modelName != null && !modelName.trim().isEmpty()) {
+				resultMap.put("model", modelName);
+			}
+			if (request.getSize() != null) {
+				resultMap.put("size", request.getSize());
+			}
+			if (request.getQuality() != null) {
+				resultMap.put("quality", request.getQuality());
+			}
+			resultMap.put("method", "google-direct-api");
+
+			String resultJson = objectMapper.writeValueAsString(resultMap);
+			log.info("Google direct API image generation successful: {} image(s) generated", imageUrls.size());
+			return new ToolExecuteResult(resultJson);
+		}
+		catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+			log.error("JSON processing error in Google direct API image generation: {}", e.getMessage(), e);
+			throw new RuntimeException("Failed to serialize image generation result", e);
+		}
+		catch (Exception e) {
+			log.error("Error in Google direct API image generation: {}", e.getMessage(), e);
+			throw e; // Re-throw to be handled by run() method
+		}
+	}
+
+	/**
+	 * Extract images from Google API response Google API returns images in
+	 * candidates[].content.parts[].inlineData format
+	 * @param responseJson JSON response string from Google API
+	 * @return List of base64 data URLs
+	 */
+	@SuppressWarnings("unchecked")
+	private List<String> extractImagesFromGoogleResponse(String responseJson) {
+		List<String> imageUrls = new ArrayList<>();
+
+		try {
+			Map<String, Object> responseMap = objectMapper.readValue(responseJson, Map.class);
+			List<Map<String, Object>> candidates = (List<Map<String, Object>>) responseMap.get("candidates");
+
+			if (candidates == null || candidates.isEmpty()) {
+				log.debug("No candidates found in Google API response");
+				return imageUrls;
+			}
+
+			for (Map<String, Object> candidate : candidates) {
+				Map<String, Object> content = (Map<String, Object>) candidate.get("content");
+				if (content == null) {
+					continue;
+				}
+
+				List<Map<String, Object>> parts = (List<Map<String, Object>>) content.get("parts");
+				if (parts == null || parts.isEmpty()) {
+					continue;
+				}
+
+				for (Map<String, Object> part : parts) {
+					Map<String, Object> inlineData = (Map<String, Object>) part.get("inlineData");
+					if (inlineData != null) {
+						String mimeType = (String) inlineData.get("mimeType");
+						String data = (String) inlineData.get("data");
+
+						if (data != null && !data.trim().isEmpty()) {
+							// Construct data URL
+							String dataUrl = "data:" + (mimeType != null ? mimeType : "image/png") + ";base64," + data;
+							imageUrls.add(dataUrl);
+							log.debug("Extracted image from Google API response (mimeType: {}, data length: {})",
+									mimeType, data.length());
+						}
+					}
+				}
+			}
+		}
+		catch (Exception e) {
+			log.error("Error extracting images from Google API response: {}", e.getMessage(), e);
+		}
+
+		return imageUrls;
 	}
 
 	/**
@@ -270,98 +388,223 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 	}
 
 	/**
-	 * Create ImageModel instance directly, similar to how openAiImageModel works in
-	 * LlmService
-	 * @param dynamicModelEntity Model entity with configuration
-	 * @return ImageModel instance
+	 * Get configured model name from LynxeProperties
+	 * @return configured model name or null if not configured
 	 */
-	private ImageModel createImageModel(DynamicModelEntity dynamicModelEntity) {
-		if (dynamicModelEntity == null) {
-			throw new IllegalArgumentException("DynamicModelEntity cannot be null");
+	private String getConfiguredModelName() {
+		if (lynxeProperties != null) {
+			String configuredModelName = lynxeProperties.getImageGenerationModelName();
+			if (configuredModelName != null && !configuredModelName.trim().isEmpty()) {
+				return configuredModelName;
+			}
 		}
-
-		// Normalize baseUrl - remove trailing slashes (similar to LlmService)
-		String baseUrl = normalizeBaseUrl(dynamicModelEntity.getBaseUrl());
-		if (baseUrl == null || baseUrl.trim().isEmpty()) {
-			throw new IllegalArgumentException("Base URL cannot be null or empty");
-		}
-
-		String apiKey = dynamicModelEntity.getApiKey();
-		if (apiKey == null || apiKey.trim().isEmpty()) {
-			throw new IllegalArgumentException("API key cannot be null or empty");
-		}
-
-		// Normalize baseUrl for image API endpoint
-		// OpenAiImageApi internally uses /v1/images/generations
-		// If baseUrl ends with /v1, we need to remove it to avoid duplicate /v1
-		// This follows the same logic as normalizeCompletionsPath in LlmService
-		String normalizedBaseUrl = normalizeBaseUrlForApiEndpoint(baseUrl);
-
-		// Build OpenAiImageApi - image generation endpoint is typically
-		// /v1/images/generations
-		// but OpenAiImageApi handles this internally, so we just need the base URL
-		OpenAiImageApi.Builder imageApiBuilder = OpenAiImageApi.builder()
-			.baseUrl(normalizedBaseUrl != null ? normalizedBaseUrl : "https://api.openai.com")
-			.apiKey(new SimpleApiKey(dynamicModelEntity.getApiKey()));
-
-		// Prepare headers with Accept: application/json to ensure JSON response
-		// This fixes the issue where server returns HTML error page instead of JSON
-		MultiValueMap<String, String> multiValueMap = new LinkedMultiValueMap<>();
-
-		// Add Accept header to ensure JSON response
-		multiValueMap.add("Accept", MediaType.APPLICATION_JSON_VALUE);
-
-		// Add custom headers if present (these may override Accept if specified)
-		Map<String, String> headers = dynamicModelEntity.getHeaders();
-		if (headers != null && !headers.isEmpty()) {
-			headers.forEach((key, value) -> multiValueMap.add(key, value));
-		}
-
-		// Set headers on the builder
-		imageApiBuilder.headers(multiValueMap);
-
-		// Use RestClient builder (OpenAiImageApi uses RestClient, not WebClient)
-		RestClient.Builder restClientBuilder = restClientBuilderProvider.getIfAvailable(RestClient::builder);
-		if (restClientBuilder != null) {
-			imageApiBuilder.restClientBuilder(restClientBuilder);
-		}
-
-		OpenAiImageApi imageApi = imageApiBuilder.build();
-
-		// Create OpenAiImageModel
-		return new OpenAiImageModel(imageApi);
+		return null;
 	}
 
 	/**
-	 * Extract image URL from output object
-	 * @param output The output object from ImageGeneration
-	 * @return Image URL or null if not found
+	 * Detect if the model should use direct Google API generation
+	 * @param modelEntity The model entity to check
+	 * @return true if Google direct API should be used, false otherwise
 	 */
-	private String extractImageUrl(Object output) {
-		try {
-			// Try to get URL using reflection (Spring AI 1.0.1 API)
-			java.lang.reflect.Method getUrlMethod = output.getClass().getMethod("getUrl");
-			Object urlObj = getUrlMethod.invoke(output);
-			if (urlObj != null) {
-				return urlObj.toString();
+	private boolean isGoogleDirectApiGeneration(DynamicModelEntity modelEntity) {
+		if (modelEntity == null) {
+			return false;
+		}
+
+		String baseUrl = modelEntity.getBaseUrl();
+		String modelName = modelEntity.getModelName();
+
+		// Check if base URL contains generativelanguage.googleapis.com
+		if (baseUrl != null && baseUrl.toLowerCase().contains("generativelanguage.googleapis.com")) {
+			log.debug("Detected Google Generative Language API base URL: {}", baseUrl);
+			return true;
+		}
+
+		// Check if base URL contains googleapis.com and model name contains gemini
+		if (baseUrl != null && baseUrl.toLowerCase().contains("googleapis.com")) {
+			if (modelName != null && modelName.toLowerCase().contains("gemini")) {
+				log.debug("Detected Google API with Gemini model: {}", modelName);
+				return true;
 			}
-			// Try getB64Json() as fallback
-			try {
-				java.lang.reflect.Method getB64JsonMethod = output.getClass().getMethod("getB64Json");
-				Object b64JsonObj = getB64JsonMethod.invoke(output);
-				if (b64JsonObj != null) {
-					return b64JsonObj.toString();
+		}
+
+		// Check if model name matches Google Gemini patterns
+		if (modelName != null) {
+			String lowerModelName = modelName.toLowerCase();
+			// Check for Google Gemini image models (e.g., gemini-3-pro-image-preview,
+			// gemini-2.5-flash-image-preview)
+			if ((lowerModelName.contains("gemini") && lowerModelName.contains("image"))
+					|| lowerModelName.startsWith("gemini-") && lowerModelName.contains("-image-")) {
+				log.debug("Detected Google Gemini image model: {}", modelName);
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Map model name to Google API format Converts names like
+	 * "google/gemini-3-pro-image-preview" to "gemini-3-pro-image-preview"
+	 * @param modelName Original model name
+	 * @return Model name suitable for Google API endpoint
+	 */
+	private String mapToGoogleModelName(String modelName) {
+		if (modelName == null || modelName.trim().isEmpty()) {
+			return modelName;
+		}
+
+		String mapped = modelName.trim();
+		// Remove "google/" prefix if present
+		if (mapped.startsWith("google/")) {
+			mapped = mapped.substring(7);
+		}
+		// Remove any other prefixes that might be present
+		if (mapped.contains("/")) {
+			String[] parts = mapped.split("/");
+			mapped = parts[parts.length - 1]; // Take the last part
+		}
+
+		log.debug("Mapped model name from '{}' to '{}'", modelName, mapped);
+		return mapped;
+	}
+
+	/**
+	 * Build enhanced error message for image generation failures Provides detailed
+	 * information about HTML response errors and OpenRouter-specific guidance
+	 * @param e The exception that occurred
+	 * @param modelEntity The model entity used for the request (can be null)
+	 * @return Enhanced error message
+	 */
+	private String buildEnhancedErrorMessage(Exception e, DynamicModelEntity modelEntity) {
+		String errorMessage = e.getMessage();
+		// Check if using provider-based generation
+		boolean isProviderBased = false;
+		if (modelEntity != null) {
+			for (ImageGenerationProvider provider : imageGenerationProviders) {
+				if (provider.supports(modelEntity, modelEntity.getModelName())) {
+					isProviderBased = true;
+					break;
 				}
 			}
-			catch (Exception e) {
-				log.debug("getB64Json() method not found", e);
+		}
+		boolean isGoogleDirect = modelEntity != null && isGoogleDirectApiGeneration(modelEntity);
+		boolean isOpenRouter = modelEntity != null && !isGoogleDirect && modelEntity.getBaseUrl() != null
+				&& modelEntity.getBaseUrl().toLowerCase().contains("openrouter.ai");
+
+		// Check for HTML response errors
+		if (errorMessage != null && errorMessage.contains("text/html")) {
+			StringBuilder msg = new StringBuilder();
+			msg.append("\n╔════════════════════════════════════════════════════════════════╗\n");
+			msg.append("║  Image API returned HTML instead of JSON - Configuration Issue  ║\n");
+			msg.append("╚════════════════════════════════════════════════════════════════╝\n\n");
+
+			if (modelEntity != null) {
+				msg.append("Model: ").append(modelEntity.getModelName()).append("\n");
+				msg.append("Base URL: ").append(modelEntity.getBaseUrl()).append("\n");
+				String apiKeyPreview = modelEntity.getApiKey() != null && modelEntity.getApiKey().length() > 7
+						? modelEntity.getApiKey().substring(0, 7) + "..." : "(not set)";
+				msg.append("API Key: ").append(apiKeyPreview).append("\n");
+				String method = isGoogleDirect ? "Direct Google API"
+						: (isProviderBased ? "Provider-based" : "API-based");
+				msg.append("Generation Method: ").append(method).append("\n\n");
 			}
+
+			msg.append("❌ HTML RESPONSE ERROR\n\n");
+			msg.append("The image API returned HTML instead of JSON. This typically indicates:\n\n");
+			msg.append("Possible causes:\n");
+			msg.append("  1. Invalid API key - Check your model configuration\n");
+			msg.append("  2. API key not properly loaded from database\n");
+			msg.append("  3. Incorrect base URL configuration\n");
+			msg.append("  4. Network/proxy issues redirecting to error page\n");
+
+			if (isGoogleDirect) {
+				msg.append("\n📌 Google Direct API Notes:\n");
+				msg.append("  • Google API uses /v1beta/models/{model}:generateContent endpoint\n");
+				msg.append("  • Uses x-goog-api-key header instead of Authorization Bearer\n");
+				msg.append("  • Verify your Google API key at https://makersuite.google.com/app/apikey\n");
+				msg.append("  • Ensure the model name is correct (e.g., gemini-3-pro-image-preview)\n");
+				msg.append("  • Check that the API key has access to Generative Language API\n");
+			}
+			else if (isOpenRouter) {
+				msg.append("\n📌 OpenRouter-Specific Notes:\n");
+				msg.append("  • OpenRouter uses chat completions with modalities parameter\n");
+				msg.append("  • Ensure your model supports image generation (check output_modalities)\n");
+				msg.append("  • Verify the model name is correct (e.g., google/gemini-2.5-flash-image-preview)\n");
+				msg.append("  • Check OpenRouter API key at https://openrouter.ai/keys\n");
+			}
+			else {
+				msg.append("\n📌 Traditional API Notes:\n");
+				msg.append("  • Traditional APIs use /v1/images/generations endpoint\n");
+				msg.append("  • Verify your API key at https://platform.openai.com/api-keys\n");
+				msg.append("  • If using OpenRouter models, they may require chat-based generation\n");
+			}
+
+			msg.append("\nHow to fix:\n");
+			if (isGoogleDirect) {
+				msg.append("  • Verify your Google API key at https://makersuite.google.com/app/apikey\n");
+				msg.append("  • Check the API key has Generative Language API enabled\n");
+				msg.append("  • Ensure baseUrl is https://generativelanguage.googleapis.com\n");
+				msg.append("  • Verify the model name is correct for Google API\n");
+			}
+			else if (isOpenRouter) {
+				msg.append("  • Verify your OpenRouter API key at https://openrouter.ai/keys\n");
+				msg.append("  • Check the model name supports image generation\n");
+				msg.append("  • Ensure baseUrl is https://openrouter.ai/api\n");
+			}
+			else {
+				msg.append("  • Verify your API key at https://platform.openai.com/api-keys\n");
+				msg.append("  • Check the API key in your model configuration\n");
+				msg.append("  • Ensure the baseUrl is correct (e.g., https://api.openai.com)\n");
+			}
+			msg.append("  • Check network connectivity and proxy settings\n\n");
+			msg.append("Error Details: ").append(errorMessage).append("\n");
+
+			return msg.toString();
 		}
-		catch (Exception e) {
-			log.warn("Failed to extract URL from image output: {}", e.getMessage());
+
+		// Check for modality-related errors
+		if (errorMessage != null && (errorMessage.contains("modalities") || errorMessage.contains("modality"))) {
+			StringBuilder msg = new StringBuilder();
+			msg.append("\n╔════════════════════════════════════════════════════════════════╗\n");
+			msg.append("║  Modality Configuration Error - OpenRouter Image Generation     ║\n");
+			msg.append("╚════════════════════════════════════════════════════════════════╝\n\n");
+
+			if (modelEntity != null) {
+				msg.append("Model: ").append(modelEntity.getModelName()).append("\n");
+				msg.append("Base URL: ").append(modelEntity.getBaseUrl()).append("\n\n");
+			}
+
+			msg.append("❌ MODALITY ERROR\n\n");
+			msg.append("The model may not support image generation or the modalities parameter is incorrect.\n\n");
+			msg.append("Possible causes:\n");
+			msg.append("  1. Model does not support image generation (check output_modalities)\n");
+			msg.append("  2. Modalities parameter not properly set\n");
+			msg.append("  3. Model name incorrect for image generation\n\n");
+			msg.append("How to fix:\n");
+			msg.append("  • Verify the model supports image generation at https://openrouter.ai/models\n");
+			msg.append("  • Check that the model has 'image' in its output_modalities\n");
+			msg.append("  • Use a model specifically designed for image generation\n");
+			msg.append("  • Examples: google/gemini-2.5-flash-image-preview, black-forest-labs/flux.2-pro\n\n");
+			msg.append("Error Details: ").append(errorMessage).append("\n");
+
+			return msg.toString();
 		}
-		// Fallback: try to convert output to string
-		return output != null ? output.toString() : null;
+
+		// For other errors, provide standard error message with context
+		StringBuilder msg = new StringBuilder();
+		msg.append("Image generation failed: ").append(errorMessage);
+		if (isGoogleDirect) {
+			msg.append("\n\nNote: Using direct Google API generation.");
+		}
+		else if (isProviderBased) {
+			msg.append("\n\nNote: Using provider-based image generation.");
+		}
+		Throwable cause = e.getCause();
+		if (cause != null && cause.getMessage() != null) {
+			msg.append("\nCause: ").append(cause.getMessage());
+		}
+		return msg.toString();
 	}
 
 	@Override
@@ -377,7 +620,8 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString;
 		try {
 			StringBuilder stateBuilder = new StringBuilder();
 			stateBuilder.append("\n=== Image Generation Tool Current State ===\n");
@@ -388,12 +632,13 @@ public class ImageGenerationTool extends AbstractBaseTool<ImageGenerationRequest
 			stateBuilder.append("Supported quality: standard, hd\n");
 			stateBuilder.append("Supported number of images: 1-10\n");
 			stateBuilder.append("\n=== End Image Generation Tool State ===\n");
-			return stateBuilder.toString();
+			stateString = stateBuilder.toString();
 		}
 		catch (Exception e) {
 			log.error("Failed to get image generation tool state", e);
-			return String.format("Image generation tool state error: %s", e.getMessage());
+			stateString = String.format("Image generation tool state error: %s", e.getMessage());
 		}
+		return new ToolStateInfo(null, stateString);
 	}
 
 }

@@ -24,8 +24,6 @@
             @change="handleOrganizationChange"
             class="organization-select"
           >
-            <option value="by_time">{{ $t('sidebar.organizationByTime') }}</option>
-            <option value="by_abc">{{ $t('sidebar.organizationByAbc') }}</option>
             <option value="by_group_time">{{ $t('sidebar.organizationByGroupTime') }}</option>
             <option value="by_group_abc">{{ $t('sidebar.organizationByGroupAbc') }}</option>
           </select>
@@ -215,7 +213,7 @@ import { useToast } from '@/plugins/useToast'
 import { templateStore, type TemplateStoreType } from '@/stores/templateStore'
 import type { PlanTemplateConfigVO } from '@/types/plan-template'
 import { Icon } from '@iconify/vue'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -245,9 +243,7 @@ const emit = defineEmits<{
 // Handle organization method change
 const handleOrganizationChange = (event: Event) => {
   const target = event.target as HTMLSelectElement
-  templateStore.setOrganizationMethod(
-    target.value as 'by_time' | 'by_abc' | 'by_group_time' | 'by_group_abc'
-  )
+  templateStore.setOrganizationMethod(target.value as 'by_group_time' | 'by_group_abc')
 }
 
 // Utility functions
@@ -405,7 +401,7 @@ const handleDeleteTemplate = async () => {
     await templateStore.deleteTemplate(templateToDelete.value)
     showDeleteConfirmModal.value = false
     templateToDelete.value = null
-    toast.success(t('sidebar.deleteSuccess') || 'Template deleted successfully')
+    // Success toast removed - deletion is confirmed by modal closing and template disappearing from list
   } catch (error) {
     console.error('Failed to delete template:', error)
     toast.error(
@@ -424,6 +420,45 @@ const cancelDelete = () => {
   showDeleteConfirmModal.value = false
   templateToDelete.value = null
 }
+
+/**
+ * Handle keyboard shortcuts for delete confirmation modal
+ * Enter: Confirm delete
+ * Esc: Cancel delete
+ */
+const handleModalKeydown = (event: KeyboardEvent) => {
+  if (!showDeleteConfirmModal.value) return
+
+  // Prevent default behavior for Enter and Esc keys
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    // Only trigger delete if not already deleting
+    if (!deleting.value && templateToDelete.value) {
+      handleDeleteTemplate()
+    }
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    cancelDelete()
+  }
+}
+
+// Add keyboard event listener when modal is shown
+watch(showDeleteConfirmModal, isVisible => {
+  if (isVisible) {
+    // Add event listener when modal opens
+    document.addEventListener('keydown', handleModalKeydown)
+  } else {
+    // Remove event listener when modal closes
+    document.removeEventListener('keydown', handleModalKeydown)
+  }
+})
+
+// Clean up event listener on component unmount
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleModalKeydown)
+})
 </script>
 
 <style scoped>

@@ -15,6 +15,13 @@
  */
 package com.alibaba.cloud.ai.lynxe.tool;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
 import com.fasterxml.jackson.core.JsonParser;
@@ -25,13 +32,6 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.ai.openai.api.OpenAiApi;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
  * LLM form input tool: supports multiple input items with labels and descriptions.
@@ -44,117 +44,7 @@ public class FormInputTool extends AbstractBaseTool<FormInputTool.UserFormInput>
 
 	private static final Logger log = LoggerFactory.getLogger(FormInputTool.class);
 
-	private String getToolParameters() {
-		return """
-				{
-				    "type": "object",
-				    "properties": {
-				        "title": {
-				            "type": "string",
-				            "description": "Title of the form displayed to the user"
-				        },
-				        "description": {
-				            "type": "string",
-				            "description": "Description of the form and what information is being collected"
-				        },
-				        "inputs": {
-				            "type": "array",
-				            "items": {
-				                "type": "object",
-				                "properties": {
-				                    "name": {
-				                        "type": "string",
-				                        "description": "Name/ID of the input field"
-				                    },
-				                    "label": {
-				                        "type": "string",
-				                        "description": "Display label for the input field"
-				                    },
-				                    "type": {
-				                        "type": "string",
-				                        "enum": ["text", "number", "email", "password", "textarea", "select", "checkbox", "radio"],
-				                        "description": "Type of input field"
-				                    },
-				                    "required": {
-				                        "type": "boolean",
-				                        "description": "Whether this field is required"
-				                    },
-				                    "placeholder": {
-				                        "type": "string",
-				                        "description": "Placeholder text for the input field"
-				                    },
-				                    "options": {
-				                        "type": "array",
-				                        "items": {
-				                            "type": "string"
-				                        },
-				                        "description": "Options for select, checkbox, or radio inputs"
-				                    }
-				                },
-				                "required": ["name", "label", "type"]
-				            },
-				            "description": "Array of input field definitions"
-				        }
-				    },
-				    "required": ["title", "description", "inputs"]
-				}
-				""";
-	}
-
-	private String getToolDescription() {
-		return """
-				Create interactive forms to collect user input. This tool allows you to define form fields and collect structured data from users through a web interface.
-				""";
-	}
-
-	private static final String LEGACY_PARAMETERS = """
-			{
-			  "type": "object",
-			  "properties": {
-			    "inputs": {
-			      "type": "array",
-			      "description": "List of input items, each containing label and value fields",
-			      "items": {
-			        "type": "object",
-			        "properties": {
-			          "label": { "type": "string", "description": "Input item label" },
-			          "value": { "type": "string", "description": "Input content" }
-			        },
-			        "required": ["label"]
-			      }
-			    },
-			    "description": {
-			      "type": "string",
-			      "description": "Instructions on how to fill these input items"
-			    }
-			  },
-			  "required": [ "description"]
-			}
-			""";
-
-	public static final String name = "form_input";
-
-	private static final String LEGACY_DESCRIPTION = """
-			Provides a labeled multi-input form tool.
-
-			LLM can use this tool to let users submit 0 or more input items (each with label and content), along with filling instructions.
-			Allows users to submit 0 input items.
-			Suitable for scenarios requiring structured input and can also be used when the model needs to wait for user input before continuing.
-			""";
-
-	public OpenAiApi.FunctionTool getToolDefinition() {
-		try {
-			OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(getToolDescription(), name,
-					getToolParameters());
-			return new OpenAiApi.FunctionTool(function);
-		}
-		catch (Exception e) {
-			log.warn("Failed to load prompt-based tool definition, using legacy configuration", e);
-			OpenAiApi.FunctionTool.Function function = new OpenAiApi.FunctionTool.Function(LEGACY_DESCRIPTION, name,
-					LEGACY_PARAMETERS);
-			return new OpenAiApi.FunctionTool(function);
-		}
-	}
+	public static final String name = "form-input";
 
 	// Data structures:
 	/**
@@ -377,6 +267,15 @@ public class FormInputTool extends AbstractBaseTool<FormInputTool.UserFormInput>
 		log.info("FormInputTool input: {}", formInput);
 
 		this.currentFormDefinition = formInput;
+		// Normalize description: convert literal \n strings to actual newlines
+		// This handles cases where LLM sends escaped newlines (\\n) which become literal
+		// \n strings
+		if (this.currentFormDefinition != null && this.currentFormDefinition.getDescription() != null) {
+			String description = this.currentFormDefinition.getDescription();
+			// Replace literal \n (backslash + n) with actual newline character
+			description = description.replace("\\n", "\n");
+			this.currentFormDefinition.setDescription(description);
+		}
 		// Initialize values to empty string if null, to ensure they are present for
 		// form binding
 		if (this.currentFormDefinition != null && this.currentFormDefinition.getInputs() != null) {
@@ -483,7 +382,7 @@ public class FormInputTool extends AbstractBaseTool<FormInputTool.UserFormInput>
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	/**
@@ -491,24 +390,29 @@ public class FormInputTool extends AbstractBaseTool<FormInputTool.UserFormInput>
 	 * user-entered values if any)
 	 */
 	@Override
-	public String getCurrentToolStateString() {
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString;
 		if (currentFormDefinition == null) {
-			return String.format("FormInputTool Status: No form defined. Current input state: %s",
+			stateString = String.format("FormInputTool Status: No form defined. Current input state: %s",
 					inputState.toString());
 		}
-		try {
-			StringBuilder stateBuilder = new StringBuilder("FormInputTool Status:\n");
-			stateBuilder
-				.append(String.format("Description: %s\nInput Items: %s\n", currentFormDefinition.getDescription(),
-						objectMapper.writeValueAsString(currentFormDefinition.getInputs())));
-			stateBuilder.append(String.format("Current input state: %s\n", inputState.toString()));
-			return stateBuilder.toString();
+		else {
+			try {
+				StringBuilder stateBuilder = new StringBuilder("FormInputTool Status:\n");
+				stateBuilder
+					.append(String.format("Description: %s\nInput Items: %s\n", currentFormDefinition.getDescription(),
+							objectMapper.writeValueAsString(currentFormDefinition.getInputs())));
+				stateBuilder.append(String.format("Current input state: %s\n", inputState.toString()));
+				stateString = stateBuilder.toString();
+			}
+			catch (JsonProcessingException e) {
+				log.error("Error serializing currentFormDefinition for state string", e);
+				stateString = String.format(
+						"FormInputTool Status: Error serializing input items. Current input state: %s",
+						inputState.toString());
+			}
 		}
-		catch (JsonProcessingException e) {
-			log.error("Error serializing currentFormDefinition for state string", e);
-			return String.format("FormInputTool Status: Error serializing input items. Current input state: %s",
-					inputState.toString());
-		}
+		return new ToolStateInfo(null, stateString);
 	}
 
 	@Override

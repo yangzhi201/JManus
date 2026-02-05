@@ -10,7 +10,7 @@ parameters: |
       "properties": {
           "prompt": {
               "type": "string",
-              "description": "描述要生成的图像的文本提示（必填）"
+              "description": "描述你想让图像生成工具具体做的事情，需要包含动作命令 和 具体要求。例如，生成关于 某些事情 的 图片， 图片的具体要求是 .... （必填）"
           },
           "model": {
               "type": "string",

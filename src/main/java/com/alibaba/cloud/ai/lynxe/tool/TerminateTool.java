@@ -145,8 +145,8 @@ public class TerminateTool extends AbstractBaseTool<Map<String, Object>> impleme
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return "";
+	public ToolStateInfo getCurrentToolStateString() {
+		return new ToolStateInfo(null, "");
 	}
 
 	public TerminateTool(String planId, String expectedReturnInfo) {
@@ -436,7 +436,7 @@ public class TerminateTool extends AbstractBaseTool<Map<String, Object>> impleme
 		return SERVICE_GROUP;
 	}
 
-	public static String SERVICE_GROUP = "default-service-group";
+	public static String SERVICE_GROUP = "default";
 
 	// ==================== TerminableTool interface implementation ====================
 

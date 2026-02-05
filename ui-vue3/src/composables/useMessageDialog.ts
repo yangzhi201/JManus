@@ -56,11 +56,15 @@ export function useMessageDialog() {
     return rootPlanId.value
   })
 
-  // Loading state
-  const isLoading = ref(false)
+  // Running state - unified state for both chat streaming and plan execution
+  const isRunning = ref(false)
   const error = ref<string | null>(null)
   const streamingMessageId = ref<string | null>(null)
   const inputPlaceholder = ref<string | null>(null)
+  // Track active streaming request's AbortController for cancellation
+  const activeStreamAbortController = ref<AbortController | null>(null)
+  // Track current streamId for backend cancellation
+  const currentStreamId = ref<string | null>(null)
 
   // Computed properties
   const activeDialog = computed(() => {
@@ -263,8 +267,8 @@ export function useMessageDialog() {
 
     try {
       // Check if there's an active running task based on our own state
-      // Disable new requests if we're currently loading
-      if (isLoading.value) {
+      // Disable new requests if we're currently running
+      if (isRunning.value) {
         const errorMsg = 'Please wait for the current task to complete before starting a new one'
         error.value = errorMsg
         return {
@@ -273,7 +277,7 @@ export function useMessageDialog() {
         }
       }
 
-      isLoading.value = true
+      isRunning.value = true
       error.value = null
 
       // Always create a new dialog for each conversation round
@@ -371,61 +375,133 @@ export function useMessageDialog() {
         // Start streaming
         startStreaming(assistantMessage.id)
 
+        // Generate streamId for backend cancellation tracking
+        const streamId = `chat-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        currentStreamId.value = streamId
+
+        // Create AbortController for this streaming request
+        const abortController = new AbortController()
+        activeStreamAbortController.value = abortController
+
         // Initialize content
         let accumulatedContent = ''
+        let streamWasAborted = false
 
         // Handle streaming chunks
-        response = (await DirectApiService.sendChatMessage(query, 'VUE_DIALOG', chunk => {
-          if (!targetDialog || !assistantMessage) return
+        try {
+          response = (await DirectApiService.sendChatMessage(
+            query,
+            'VUE_DIALOG',
+            chunk => {
+              if (!targetDialog || !assistantMessage) return
 
-          if (chunk.type === 'start' && chunk.conversationId) {
-            // Update conversationId if present (persisted)
-            conversationId.value = chunk.conversationId
-            targetDialog.conversationId = chunk.conversationId
-            memoryStore.setConversationId(chunk.conversationId)
-            console.log('[useMessageDialog] Conversation ID set from stream:', chunk.conversationId)
-          } else if (chunk.type === 'chunk' && chunk.content) {
-            // Append chunk to accumulated content
-            accumulatedContent += chunk.content
-            // Update message content incrementally
-            updateMessageInDialog(targetDialog.id, assistantMessage.id, {
-              content: accumulatedContent,
-              isStreaming: true,
-              thinking: '',
-            })
-          } else if (chunk.type === 'done') {
-            // Stop streaming
+              if (chunk.type === 'start' && chunk.conversationId) {
+                // Update conversationId if present (persisted)
+                conversationId.value = chunk.conversationId
+                targetDialog.conversationId = chunk.conversationId
+                memoryStore.setConversationId(chunk.conversationId)
+                console.log(
+                  '[useMessageDialog] Conversation ID set from stream:',
+                  chunk.conversationId
+                )
+
+                // Update streamId if provided by backend
+                const chunkWithStreamId = chunk as { streamId?: string }
+                if (chunkWithStreamId.streamId) {
+                  currentStreamId.value = chunkWithStreamId.streamId
+                  console.log(
+                    '[useMessageDialog] Stream ID received from backend:',
+                    currentStreamId.value
+                  )
+                }
+              } else if (chunk.type === 'chunk' && chunk.content) {
+                // Append chunk to accumulated content
+                accumulatedContent += chunk.content
+                // Update message content incrementally
+                updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+                  content: accumulatedContent,
+                  isStreaming: true,
+                  thinking: '',
+                })
+              } else if (chunk.type === 'done') {
+                // Stop streaming
+                stopStreaming(assistantMessage.id)
+                // Clear streamId
+                currentStreamId.value = null
+                // Final update
+                updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+                  content: accumulatedContent || 'No response received',
+                  isStreaming: false,
+                  thinking: '',
+                })
+              } else if (chunk.type === 'cancelled') {
+                // Stream was cancelled (backend-driven cancellation)
+                console.log('[useMessageDialog] Stream cancelled by backend')
+                stopStreaming(assistantMessage.id)
+                currentStreamId.value = null
+                updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+                  content: accumulatedContent || 'Stream cancelled by user',
+                  isStreaming: false,
+                  thinking: '',
+                })
+              } else if (chunk.type === 'error') {
+                // Handle error
+                stopStreaming(assistantMessage.id)
+                updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+                  content: `Error: ${chunk.message || 'Streaming error occurred'}`,
+                  error: chunk.message || 'Streaming error occurred',
+                  isStreaming: false,
+                })
+              }
+            },
+            abortController.signal
+          )) as typeof response
+        } catch (streamError) {
+          // Handle abort or other stream errors
+          if (streamError instanceof Error && streamError.name === 'AbortError') {
+            console.log('[useMessageDialog] Stream was aborted by user')
+            streamWasAborted = true
+            // Update message to show stopped status
+            if (targetDialog && assistantMessage) {
+              updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+                content: accumulatedContent || 'Stream stopped by user',
+                isStreaming: false,
+                thinking: '',
+              })
+            }
             stopStreaming(assistantMessage.id)
-            // Final update
-            updateMessageInDialog(targetDialog.id, assistantMessage.id, {
-              content: accumulatedContent || 'No response received',
-              isStreaming: false,
-              thinking: '',
-            })
-          } else if (chunk.type === 'error') {
-            // Handle error
-            stopStreaming(assistantMessage.id)
-            updateMessageInDialog(targetDialog.id, assistantMessage.id, {
-              content: `Error: ${chunk.message || 'Streaming error occurred'}`,
-              error: chunk.message || 'Streaming error occurred',
-              isStreaming: false,
-            })
+            // Set response to empty object to avoid errors below
+            response = {} as typeof response
+            // Don't throw - this is expected when user stops
+          } else {
+            throw streamError
           }
-        })) as typeof response
-
-        // Ensure streaming is stopped and final content is set
-        stopStreaming(assistantMessage.id)
-        if (response?.conversationId) {
-          conversationId.value = response.conversationId
-          targetDialog.conversationId = response.conversationId
-          memoryStore.setConversationId(response.conversationId)
+        } finally {
+          // Clear AbortController and streamId when done
+          if (activeStreamAbortController.value === abortController) {
+            activeStreamAbortController.value = null
+          }
+          // Only clear streamId if this was the current stream
+          if (currentStreamId.value === streamId) {
+            currentStreamId.value = null
+          }
         }
-        // Final update with complete message
-        updateMessageInDialog(targetDialog.id, assistantMessage.id, {
-          content: response?.message || accumulatedContent || 'No response received',
-          isStreaming: false,
-          thinking: '',
-        })
+
+        // Ensure streaming is stopped and final content is set (only if not aborted)
+        if (!streamWasAborted) {
+          stopStreaming(assistantMessage.id)
+          if (response?.conversationId) {
+            conversationId.value = response.conversationId
+            targetDialog.conversationId = response.conversationId
+            memoryStore.setConversationId(response.conversationId)
+          }
+          // Final update with complete message
+          updateMessageInDialog(targetDialog.id, assistantMessage.id, {
+            content: response?.message || accumulatedContent || 'No response received',
+            isStreaming: false,
+            thinking: '',
+          })
+        }
       }
 
       return {
@@ -452,10 +528,10 @@ export function useMessageDialog() {
         error: errorMessage,
       }
     } finally {
-      // Only reset isLoading if no plan execution is in progress
-      // If a planId was returned, isLoading will be reset by watchEffect when plan completes
+      // Only reset isRunning if no plan execution is in progress
+      // If a planId was returned, isRunning will be reset by watchEffect when plan completes
       if (!response?.planId) {
-        isLoading.value = false
+        isRunning.value = false
       }
       // If planId exists, let watchEffect handle the reset when plan completes
     }
@@ -473,8 +549,8 @@ export function useMessageDialog() {
 
     try {
       // Check if there's an active running task based on our own state
-      // Disable new requests if we're currently loading
-      if (isLoading.value) {
+      // Disable new requests if we're currently running
+      if (isRunning.value) {
         const errorMsg = 'Please wait for the current task to complete before starting a new one'
         error.value = errorMsg
         return {
@@ -483,7 +559,7 @@ export function useMessageDialog() {
         }
       }
 
-      isLoading.value = true
+      isRunning.value = true
       error.value = null
 
       // Check if there's an existing conversationId from memoryStore (persisted)
@@ -638,8 +714,8 @@ export function useMessageDialog() {
         })
       }
 
-      // Reset isLoading on error since execution failed
-      isLoading.value = false
+      // Reset isRunning on error since execution failed
+      isRunning.value = false
 
       return {
         success: false,
@@ -786,6 +862,80 @@ export function useMessageDialog() {
     if (streamingMessageId.value === messageId || !messageId) {
       streamingMessageId.value = null
     }
+    // Clear AbortController when stopping streaming
+    if (!messageId || streamingMessageId.value === messageId) {
+      activeStreamAbortController.value = null
+    }
+  }
+
+  /**
+   * Stop active chat streaming
+   * Requires streamId and conversationId for backend cancellation (multi-machine support)
+   * Handles the case where stream may have already completed (400 error) gracefully
+   */
+  const stopChatStreaming = async () => {
+    const currentStreamingMessageId = streamingMessageId.value
+    const streamId = currentStreamId.value
+    const convId = conversationId.value
+
+    // Validate required parameters
+    if (!streamId || !convId) {
+      const errorMsg = `Cannot cancel chat stream: missing required parameters. streamId: ${streamId}, conversationId: ${convId}`
+      console.error('[useMessageDialog]', errorMsg)
+      throw new Error(errorMsg)
+    }
+
+    // Try to cancel on backend, but don't fail if stream already completed
+    let backendCancelled = false
+    try {
+      console.log('[useMessageDialog] Attempting backend cancellation for streamId:', streamId)
+      await DirectApiService.cancelChatStream(convId, streamId)
+      console.log('[useMessageDialog] Backend cancellation request sent')
+      backendCancelled = true
+    } catch (error) {
+      // If stream doesn't exist (already completed), treat as success and continue cleanup
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (errorMessage.includes('No active stream found') || errorMessage.includes('400')) {
+        console.log(
+          '[useMessageDialog] Stream already completed or cancelled on backend, continuing with cleanup'
+        )
+        backendCancelled = false // Stream was already done, but we still need to clean up frontend
+      } else {
+        // For other errors, log but still proceed with cleanup
+        console.warn(
+          '[useMessageDialog] Backend cancellation failed, but continuing with cleanup:',
+          error
+        )
+      }
+    }
+
+    // Always abort client-side for immediate feedback (even if backend cancel failed)
+    const controller = activeStreamAbortController.value
+    if (controller) {
+      console.log('[useMessageDialog] Aborting client-side connection')
+      controller.abort()
+      activeStreamAbortController.value = null
+    }
+
+    if (currentStreamingMessageId) {
+      // Update message to show stopped status
+      const message = findMessage(currentStreamingMessageId)
+      if (message && message.type === 'assistant') {
+        updateMessage(currentStreamingMessageId, {
+          content:
+            message.content || (backendCancelled ? 'Stream stopped by user' : 'Stream completed'),
+          isStreaming: false,
+          thinking: '',
+        })
+      }
+      stopStreaming(currentStreamingMessageId)
+    }
+
+    // Clear streamId
+    currentStreamId.value = null
+
+    // Reset running state
+    isRunning.value = false
   }
 
   /**
@@ -801,18 +951,26 @@ export function useMessageDialog() {
   }
 
   /**
+   * Set isRunning state
+   * @param running - Whether the task is running
+   */
+  const setIsRunning = (running: boolean) => {
+    isRunning.value = running
+  }
+
+  /**
    * Update input state (enabled/disabled)
    */
   const updateInputState = (enabled: boolean, placeholder?: string) => {
-    // isLoading is the inverse of enabled
-    isLoading.value = !enabled
+    // isRunning is the inverse of enabled
+    isRunning.value = !enabled
     if (placeholder !== undefined) {
       inputPlaceholder.value = placeholder
     }
     console.log('[useMessageDialog] Input state updated:', {
       enabled,
       placeholder,
-      isLoading: isLoading.value,
+      isRunning: isRunning.value,
     })
   }
 
@@ -829,13 +987,20 @@ export function useMessageDialog() {
    * Reset state
    */
   const reset = () => {
+    // Stop any active streaming before resetting
+    if (activeStreamAbortController.value) {
+      activeStreamAbortController.value.abort()
+      activeStreamAbortController.value = null
+    }
     dialogList.value = []
     activeDialogId.value = null
     rootPlanId.value = null
     conversationId.value = null
-    isLoading.value = false
+    isRunning.value = false
     error.value = null
     inputPlaceholder.value = null
+    streamingMessageId.value = null
+    currentStreamId.value = null
   }
 
   /**
@@ -1031,7 +1196,7 @@ export function useMessageDialog() {
       updateMessageWithPlanRecord(dialog, message, record)
     }
 
-    // Reset isLoading when all plans are completed
+    // Reset isRunning when all plans are completed
     // Check both trackedPlanIds and planExecutionRecords to handle the case where
     // a plan has just started but hasn't been polled yet (no record in planExecutionRecords)
     const hasTrackedPlans = planExecution.trackedPlanIds.value.size > 0
@@ -1039,18 +1204,45 @@ export function useMessageDialog() {
       ([, record]) => record && !record.completed && record.status !== 'failed'
     )
 
+    // Check if there are dialogs waiting for planId (dialogs created but planId not set yet)
+    // or dialogs with assistant messages that are streaming or have running planExecution
+    const hasDialogsWaitingForPlanId = dialogs.some(dialog => {
+      // Check if dialog has an assistant message that is streaming
+      const hasStreamingMessage = dialog.messages.some(m => m.type === 'assistant' && m.isStreaming)
+      if (hasStreamingMessage) return true
+
+      // Check if dialog has an assistant message with running planExecution
+      const hasRunningPlanExecution = dialog.messages.some(
+        m => m.type === 'assistant' && m.planExecution?.status === 'running'
+      )
+      if (hasRunningPlanExecution) return true
+
+      // Check if dialog exists but has no planId yet (created but waiting for API response)
+      // This handles the race condition where executePlan creates a dialog but planId hasn't arrived
+      if (!dialog.planId && dialog.messages.length > 0) {
+        // If there's a user message but no assistant message yet, it's likely waiting for planId
+        const hasUserMessage = dialog.messages.some(m => m.type === 'user')
+        const hasAssistantMessage = dialog.messages.some(m => m.type === 'assistant')
+        if (hasUserMessage && !hasAssistantMessage) return true
+      }
+
+      return false
+    })
+
     // If there are tracked plans but no records yet, consider it as running
     // This handles the race condition where a plan just started but hasn't been polled
-    const hasRunningPlans = hasTrackedPlans || hasRunningPlansInRecords
+    const hasRunningPlans =
+      hasTrackedPlans || hasRunningPlansInRecords || hasDialogsWaitingForPlanId
 
-    if (!hasRunningPlans && isLoading.value) {
-      console.log('[useMessageDialog] All plans completed, resetting isLoading', {
+    if (!hasRunningPlans && isRunning.value) {
+      console.log('[useMessageDialog] All plans completed, resetting isRunning', {
         hasTrackedPlans,
         hasRunningPlansInRecords,
+        hasDialogsWaitingForPlanId,
         trackedPlanIds: Array.from(planExecution.trackedPlanIds.value),
         recordsCount: recordsArray.length,
       })
-      isLoading.value = false
+      isRunning.value = false
     }
   })
 
@@ -1060,10 +1252,12 @@ export function useMessageDialog() {
     activeDialogId: readonly(activeDialogId),
     rootPlanId: readonly(rootPlanId),
     conversationId: readonly(conversationId),
-    isLoading,
+    isRunning: readonly(isRunning),
     error,
     streamingMessageId: readonly(streamingMessageId),
     inputPlaceholder: readonly(inputPlaceholder),
+    activeStreamAbortController: readonly(activeStreamAbortController),
+    currentStreamId: readonly(currentStreamId),
 
     // Computed
     activeDialog,
@@ -1085,6 +1279,7 @@ export function useMessageDialog() {
     sendMessage,
     executePlan,
     updatePlanExecutionStatus,
+    setIsRunning,
     updateInputState,
     setConversationId,
     reset,
@@ -1095,6 +1290,7 @@ export function useMessageDialog() {
     findMessage,
     startStreaming,
     stopStreaming,
+    stopChatStreaming,
     clearMessages,
   }
 }

@@ -16,6 +16,8 @@
 
 package com.alibaba.cloud.ai.lynxe.config;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Lazy;
@@ -26,6 +28,8 @@ import com.alibaba.cloud.ai.lynxe.config.entity.ConfigInputType;
 @Component
 @ConfigurationProperties(prefix = "lynxe")
 public class LynxeProperties {
+
+	private static final Logger log = LoggerFactory.getLogger(LynxeProperties.class);
 
 	@Lazy
 	@Autowired
@@ -239,26 +243,83 @@ public class LynxeProperties {
 		this.enableConversationMemory = enableConversationMemory;
 	}
 
-	@ConfigProperty(group = "lynxe", subGroup = "agent", key = "conversationMemoryMaxChars",
-			path = "lynxe.agent.conversationMemoryMaxChars",
-			description = "lynxe.agent.conversationMemoryMaxChars.description", defaultValue = "30000",
-			inputType = ConfigInputType.NUMBER)
-	private volatile Integer conversationMemoryMaxChars;
+	@ConfigProperty(group = "lynxe", subGroup = "general", key = "enableSmartContentSaving",
+			path = "lynxe.general.enableSmartContentSaving",
+			description = "lynxe.general.enableSmartContentSaving.description", defaultValue = "false",
+			inputType = ConfigInputType.CHECKBOX,
+			options = { @ConfigOption(value = "true", label = "lynxe.general.enableSmartContentSaving.option.true"),
+					@ConfigOption(value = "false", label = "lynxe.general.enableSmartContentSaving.option.false") })
+	private volatile Boolean enableSmartContentSaving;
 
-	public Integer getConversationMemoryMaxChars() {
-		String configPath = "lynxe.agent.conversationMemoryMaxChars";
+	public Boolean getEnableSmartContentSaving() {
+		String configPath = "lynxe.general.enableSmartContentSaving";
 		String value = configService.getConfigValue(configPath);
 		if (value != null) {
-			conversationMemoryMaxChars = Integer.valueOf(value);
+			enableSmartContentSaving = Boolean.valueOf(value);
 		}
-		if (conversationMemoryMaxChars == null) {
-			conversationMemoryMaxChars = 30000;
+		// Default to false if not configured
+		if (enableSmartContentSaving == null) {
+			enableSmartContentSaving = false;
 		}
-		return conversationMemoryMaxChars;
+		return enableSmartContentSaving;
 	}
 
-	public void setConversationMemoryMaxChars(Integer conversationMemoryMaxChars) {
-		this.conversationMemoryMaxChars = conversationMemoryMaxChars;
+	public void setEnableSmartContentSaving(Boolean enableSmartContentSaving) {
+		this.enableSmartContentSaving = enableSmartContentSaving;
+	}
+
+	@ConfigProperty(group = "lynxe", subGroup = "agent", key = "chatCompressionThreshold",
+			path = "lynxe.agent.chatCompressionThreshold",
+			description = "lynxe.agent.chatCompressionThreshold.description", defaultValue = "0.7",
+			inputType = ConfigInputType.NUMBER)
+	private volatile Double chatCompressionThreshold;
+
+	public Double getChatCompressionThreshold() {
+		String configPath = "lynxe.agent.chatCompressionThreshold";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			try {
+				chatCompressionThreshold = Double.valueOf(value);
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid chatCompressionThreshold value: {}, using default 0.7", value);
+			}
+		}
+		if (chatCompressionThreshold == null) {
+			chatCompressionThreshold = 0.7; // Default to 70%
+		}
+		return chatCompressionThreshold;
+	}
+
+	public void setChatCompressionThreshold(Double chatCompressionThreshold) {
+		this.chatCompressionThreshold = chatCompressionThreshold;
+	}
+
+	@ConfigProperty(group = "lynxe", subGroup = "agent", key = "chatCompressionRetentionRatio",
+			path = "lynxe.agent.chatCompressionRetentionRatio",
+			description = "lynxe.agent.chatCompressionRetentionRatio.description", defaultValue = "0.3",
+			inputType = ConfigInputType.NUMBER)
+	private volatile Double chatCompressionRetentionRatio;
+
+	public Double getChatCompressionRetentionRatio() {
+		String configPath = "lynxe.agent.chatCompressionRetentionRatio";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			try {
+				chatCompressionRetentionRatio = Double.valueOf(value);
+			}
+			catch (NumberFormatException e) {
+				log.warn("Invalid chatCompressionRetentionRatio value: {}, using default 0.3", value);
+			}
+		}
+		if (chatCompressionRetentionRatio == null) {
+			chatCompressionRetentionRatio = 0.3; // Default to 30%
+		}
+		return chatCompressionRetentionRatio;
+	}
+
+	public void setChatCompressionRetentionRatio(Double chatCompressionRetentionRatio) {
+		this.chatCompressionRetentionRatio = chatCompressionRetentionRatio;
 	}
 
 	@ConfigProperty(group = "lynxe", subGroup = "agent", key = "parallelToolCalls",
@@ -328,6 +389,28 @@ public class LynxeProperties {
 		this.llmReadTimeout = llmReadTimeout;
 	}
 
+	@ConfigProperty(group = "lynxe", subGroup = "agent", key = "maxLinesForFullRead",
+			path = "lynxe.agent.maxLinesForFullRead", description = "lynxe.agent.maxLinesForFullRead.description",
+			defaultValue = "700", inputType = ConfigInputType.NUMBER)
+	private volatile Integer maxLinesForFullRead;
+
+	public Integer getMaxLinesForFullRead() {
+		String configPath = "lynxe.agent.maxLinesForFullRead";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			maxLinesForFullRead = Integer.valueOf(value);
+		}
+		// Ensure a default value if not configured and not set
+		if (maxLinesForFullRead == null) {
+			maxLinesForFullRead = 700;
+		}
+		return maxLinesForFullRead;
+	}
+
+	public void setMaxLinesForFullRead(Integer maxLinesForFullRead) {
+		this.maxLinesForFullRead = maxLinesForFullRead;
+	}
+
 	// Agent Settings
 	// End-----------------------------------------------------------------------------------------------
 
@@ -378,6 +461,31 @@ public class LynxeProperties {
 
 	public void setRespectGitIgnore(Boolean respectGitIgnore) {
 		this.respectGitIgnore = respectGitIgnore;
+	}
+
+	@ConfigProperty(group = "lynxe", subGroup = "general", key = "bashSecurityProtection",
+			path = "lynxe.general.bashSecurityProtection",
+			description = "lynxe.general.bashSecurityProtection.description", defaultValue = "true",
+			inputType = ConfigInputType.CHECKBOX,
+			options = { @ConfigOption(value = "true", label = "lynxe.general.bashSecurityProtection.option.true"),
+					@ConfigOption(value = "false", label = "lynxe.general.bashSecurityProtection.option.false") })
+	private volatile Boolean bashSecurityProtection;
+
+	public Boolean getBashSecurityProtection() {
+		String configPath = "lynxe.general.bashSecurityProtection";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			bashSecurityProtection = Boolean.valueOf(value);
+		}
+		// Default to true if not configured
+		if (bashSecurityProtection == null) {
+			bashSecurityProtection = true;
+		}
+		return bashSecurityProtection;
+	}
+
+	public void setBashSecurityProtection(Boolean bashSecurityProtection) {
+		this.bashSecurityProtection = bashSecurityProtection;
 	}
 
 	// MCP Service Loader Settings
@@ -570,6 +678,34 @@ public class LynxeProperties {
 	}
 
 	// Image Recognition Settings
+	// End----------------------------------------------------------------------------------------------
+
+	// Image Generation Settings
+	// Begin-------------------------------------------------------------------------------------------
+
+	@ConfigProperty(group = "lynxe", subGroup = "imageGeneration", key = "modelName",
+			path = "lynxe.imageGeneration.modelName", description = "lynxe.imageGeneration.modelName.description",
+			defaultValue = "wan2.6-t2i", inputType = ConfigInputType.TEXT)
+	private volatile String imageGenerationModelName;
+
+	public String getImageGenerationModelName() {
+		String configPath = "lynxe.imageGeneration.modelName";
+		String value = configService.getConfigValue(configPath);
+		if (value != null) {
+			imageGenerationModelName = value;
+		}
+		// Default to "wan2.6-t2i" if not configured
+		if (imageGenerationModelName == null || imageGenerationModelName.trim().isEmpty()) {
+			imageGenerationModelName = "wan2.6-t2i";
+		}
+		return imageGenerationModelName;
+	}
+
+	public void setImageGenerationModelName(String imageGenerationModelName) {
+		this.imageGenerationModelName = imageGenerationModelName;
+	}
+
+	// Image Generation Settings
 	// End----------------------------------------------------------------------------------------------
 
 }

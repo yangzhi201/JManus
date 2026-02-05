@@ -12,8 +12,8 @@ description: |
   - Result limiting: Use head_limit to cap output (default: 1000 results)
   
   ## When to Use:
-  ✅ Use Grep for: Exact text search, regex matching, known symbol/variable name lookup, quick string location
-  ❌ Don't use Grep for: Semantic understanding search (→ SemanticSearch), file name search (→ Glob), reading known files (→ Read)
+  Use Grep for: Exact text search, regex matching, known symbol/variable name lookup, quick string location
+  Don't use Grep for: Semantic understanding search (use SemanticSearch), file name search (use Glob), reading known files (use Read)
   
   ## Supported File Types:
   java, py, js, ts, rust, go, cpp, md, json, xml, yaml, sql, sh, css, html

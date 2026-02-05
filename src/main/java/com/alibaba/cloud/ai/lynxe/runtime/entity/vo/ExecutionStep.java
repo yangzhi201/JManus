@@ -16,7 +16,6 @@
 package com.alibaba.cloud.ai.lynxe.runtime.entity.vo;
 
 import java.util.List;
-import java.util.UUID;
 
 import com.alibaba.cloud.ai.lynxe.agent.AgentState;
 import com.alibaba.cloud.ai.lynxe.agent.BaseAgent;
@@ -30,17 +29,18 @@ public class ExecutionStep {
 	/**
 	 * Unique identifier for this execution step
 	 */
-	private final String stepId;
+	private String stepId;
 
 	/**
-	 * Default constructor that generates a unique step ID
+	 * Constructor that requires a step ID
+	 * @param stepId The step ID to use for this execution step
 	 */
-	public ExecutionStep() {
-		this.stepId = "step-" + UUID.randomUUID().toString();
-	}
-
 	public ExecutionStep(String stepId) {
 		this.stepId = stepId;
+	}
+
+	public ExecutionStep() {
+
 	}
 
 	@JsonIgnore
@@ -94,6 +94,10 @@ public class ExecutionStep {
 	@JsonIgnore
 	public String getStepId() {
 		return stepId;
+	}
+
+	public void setStepId(String stepId) {
+		this.stepId = stepId;
 	}
 
 	public String getTerminateColumns() {

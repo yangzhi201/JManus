@@ -16,6 +16,7 @@
 package com.alibaba.cloud.ai.lynxe.tool.jsxGenerator;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -259,8 +260,8 @@ public class JsxGeneratorOperator extends AbstractBaseTool<JsxGeneratorOperator.
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return "JSX Generator Operator is ready";
+	public ToolStateInfo getCurrentToolStateString() {
+		return new ToolStateInfo(null, "JSX Generator Operator is ready");
 	}
 
 	@Override

@@ -122,19 +122,30 @@ public interface PlanExecutionRecorder {
 
 		private final String errorMessage;
 
-		private final Integer inputCharCount;
+		// Note: These fields store token counts, but keep the naming for database column
+		// compatibility
+		private final Integer inputCharCount; // Actually stores token count
 
-		private final Integer outputCharCount;
+		private final Integer outputCharCount; // Actually stores token count
+
+		private final Integer modelContextLimit;
 
 		private final List<ActToolParam> actToolInfoList;
 
 		public ThinkActRecordParams(String thinkActId, String stepId, String thinkInput, String thinkOutput,
 				String errorMessage, List<ActToolParam> actToolInfoList) {
-			this(thinkActId, stepId, thinkInput, thinkOutput, errorMessage, null, null, actToolInfoList);
+			this(thinkActId, stepId, thinkInput, thinkOutput, errorMessage, null, null, null, actToolInfoList);
 		}
 
 		public ThinkActRecordParams(String thinkActId, String stepId, String thinkInput, String thinkOutput,
-				String errorMessage, Integer inputCharCount, Integer outputCharCount,
+				String errorMessage, Integer inputTokenCount, Integer outputTokenCount,
+				List<ActToolParam> actToolInfoList) {
+			this(thinkActId, stepId, thinkInput, thinkOutput, errorMessage, inputTokenCount, outputTokenCount, null,
+					actToolInfoList);
+		}
+
+		public ThinkActRecordParams(String thinkActId, String stepId, String thinkInput, String thinkOutput,
+				String errorMessage, Integer inputTokenCount, Integer outputTokenCount, Integer modelContextLimit,
 				List<ActToolParam> actToolInfoList) {
 
 			this.thinkActId = thinkActId;
@@ -142,8 +153,11 @@ public interface PlanExecutionRecorder {
 			this.thinkInput = thinkInput;
 			this.thinkOutput = thinkOutput;
 			this.errorMessage = errorMessage;
-			this.inputCharCount = inputCharCount;
-			this.outputCharCount = outputCharCount;
+			this.inputCharCount = inputTokenCount; // Store token count in charCount field
+													// for DB compatibility
+			this.outputCharCount = outputTokenCount; // Store token count in charCount
+														// field for DB compatibility
+			this.modelContextLimit = modelContextLimit;
 			this.actToolInfoList = actToolInfoList;
 		}
 
@@ -171,12 +185,26 @@ public interface PlanExecutionRecorder {
 			return actToolInfoList;
 		}
 
+		/**
+		 * Get input token count (stored in inputCharCount field for database
+		 * compatibility)
+		 * @return Input token count
+		 */
 		public Integer getInputCharCount() {
 			return inputCharCount;
 		}
 
+		/**
+		 * Get output token count (stored in outputCharCount field for database
+		 * compatibility)
+		 * @return Output token count
+		 */
 		public Integer getOutputCharCount() {
 			return outputCharCount;
+		}
+
+		public Integer getModelContextLimit() {
+			return modelContextLimit;
 		}
 
 	}

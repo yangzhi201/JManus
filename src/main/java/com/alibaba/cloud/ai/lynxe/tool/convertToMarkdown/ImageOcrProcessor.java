@@ -77,10 +77,11 @@ public class ImageOcrProcessor {
 	 * @param currentPlanId Current plan ID for file operations
 	 * @param targetFilename Optional target filename (if null, will generate _ocr.txt
 	 * filename)
+	 * @param modelName Optional model name to override default configuration
 	 * @return ToolExecuteResult with OCR processing status and extracted text
 	 */
 	public ToolExecuteResult convertImageToTextWithOcr(Path sourceFile, String additionalRequirement,
-			String currentPlanId, String targetFilename) {
+			String currentPlanId, String targetFilename, String modelName) {
 		try {
 			log.info("Starting OCR processing for image file: {}", sourceFile.getFileName());
 
@@ -101,9 +102,11 @@ public class ImageOcrProcessor {
 			// Step 3: Process image with OCR using executor pool
 			String extractedText;
 			if (imageRecognitionExecutorPool != null) {
+				final String finalModelName = modelName; // Make effectively final for
+															// lambda
 				CompletableFuture<String> ocrTask = imageRecognitionExecutorPool.submitTask(() -> {
 					log.info("Processing image with OCR");
-					return processImageWithOcrWithRetry(image, 1, additionalRequirement);
+					return processImageWithOcrWithRetry(image, 1, additionalRequirement, finalModelName);
 				});
 
 				try {
@@ -209,15 +212,17 @@ public class ImageOcrProcessor {
 	 * @param image The BufferedImage to process
 	 * @param imageNumber The image number for logging
 	 * @param additionalRequirement Optional additional requirements for OCR processing
+	 * @param modelName Optional model name to override default configuration
 	 * @return Extracted text or null if failed
 	 */
-	private String processImageWithOcrWithRetry(BufferedImage image, int imageNumber, String additionalRequirement) {
+	private String processImageWithOcrWithRetry(BufferedImage image, int imageNumber, String additionalRequirement,
+			String modelName) {
 		int maxRetryAttempts = getConfiguredMaxRetryAttempts();
 
 		for (int attempt = 1; attempt <= maxRetryAttempts; attempt++) {
 			try {
 				log.debug("OCR attempt {} of {} for image {}", attempt, maxRetryAttempts, imageNumber);
-				String result = processImageWithOcr(image, imageNumber, additionalRequirement);
+				String result = processImageWithOcr(image, imageNumber, additionalRequirement, modelName);
 
 				if (result != null && !result.trim().isEmpty()) {
 					if (attempt > 1) {
@@ -260,9 +265,11 @@ public class ImageOcrProcessor {
 	 * @param image The BufferedImage to process
 	 * @param imageNumber The image number for logging
 	 * @param additionalRequirement Optional additional requirements for OCR processing
+	 * @param modelName Optional model name to override default configuration
 	 * @return Extracted text or null if failed
 	 */
-	private String processImageWithOcr(BufferedImage image, int imageNumber, String additionalRequirement) {
+	private String processImageWithOcr(BufferedImage image, int imageNumber, String additionalRequirement,
+			String modelName) {
 		if (llmService == null) {
 			log.error("LlmService is not initialized, cannot perform OCR");
 			return null;
@@ -281,28 +288,47 @@ public class ImageOcrProcessor {
 
 			// Get the ChatClient from LlmService
 			ChatClient chatClient = llmService.getDefaultDynamicAgentChatClient();
-			// Use configured model name from LynxeProperties
-			String modelName = getConfiguredModelName();
-			ChatOptions chatOptions = ChatOptions.builder().model(modelName).build();
+			// Use provided model name if available, otherwise use configured model name
+			// from LynxeProperties
+			String finalModelName = (modelName != null && !modelName.trim().isEmpty()) ? modelName
+					: getConfiguredModelName();
+			if (modelName != null && !modelName.trim().isEmpty()) {
+				log.debug("Using provided model name: {}", finalModelName);
+			}
+			else {
+				log.debug("Using configured model name: {}", finalModelName);
+			}
+			ChatOptions chatOptions = ChatOptions.builder().model(finalModelName).build();
 
 			// Use ChatClient to process the image with OCR
 			// Include additional requirements in the system message if provided
 			String extractedText = chatClient.prompt().options(chatOptions).system(systemMessage -> {
 				systemMessage.text("You are an OCR (Optical Character Recognition) specialist.");
 				systemMessage.text("Extract all visible text content from the provided image.");
-				systemMessage.text("Return only the extracted text without any additional formatting or descriptions.");
-				systemMessage.text("Preserve the structure and layout of the text as much as possible.");
+				systemMessage.text(
+						"Return ONLY the extracted text content - do NOT return coordinates, bounding boxes, or any structured data.");
+				systemMessage.text(
+						"Do NOT return numbers in the format of 'x,y,width,height,angle' or any coordinate information.");
+				systemMessage.text(
+						"Return only readable text characters, preserving the structure and layout as much as possible.");
+				systemMessage.text("For Chinese text, extract all Chinese characters accurately.");
 				systemMessage.text("Focus on accurate text recognition and maintain readability.");
 				if (additionalRequirement != null && !additionalRequirement.trim().isEmpty()) {
 					systemMessage.text("Additional requirements: " + additionalRequirement);
 				}
 				systemMessage.text("If no text is visible in the image, return ''(empty string) ");
 			})
-				.user(userMessage -> userMessage.text("Please extract all text content from this image:")
+				.user(userMessage -> userMessage.text(
+						"Please extract all text content from this image. Return only the text content, not coordinates or bounding boxes:")
 					.media(MimeTypeUtils.parseMimeType("image/" + imageFormatName.toLowerCase()),
 							new InputStreamResource(imageInputStream)))
 				.call()
 				.content();
+
+			// Post-process to filter out coordinate data if present
+			if (extractedText != null && !extractedText.trim().isEmpty()) {
+				extractedText = filterCoordinateData(extractedText);
+			}
 
 			if (extractedText != null && !extractedText.trim().isEmpty()
 					&& !extractedText.toLowerCase().contains("no text detected")) {
@@ -319,6 +345,56 @@ public class ImageOcrProcessor {
 			log.error("Error processing image with OCR using ChatClient: {}", e.getMessage(), e);
 			return null;
 		}
+	}
+
+	/**
+	 * Filter out coordinate data patterns from OCR result Detects and removes lines that
+	 * match OCR bounding box coordinate patterns (e.g., "30,18,21,30,90")
+	 * @param text The OCR result text that may contain coordinates
+	 * @return Filtered text with coordinates removed
+	 */
+	private String filterCoordinateData(String text) {
+		if (text == null || text.trim().isEmpty()) {
+			return text;
+		}
+
+		// Pattern to match coordinate lines: numbers separated by commas (typically 4-5
+		// numbers)
+		// Format: x,y,width,height,angle or similar
+		java.util.regex.Pattern coordinatePattern = java.util.regex.Pattern
+			.compile("^\\s*\\d+,\\d+,\\d+,\\d+(,\\d+)?\\s*$", java.util.regex.Pattern.MULTILINE);
+
+		String[] lines = text.split("\\r?\\n");
+		java.util.List<String> filteredLines = new java.util.ArrayList<>();
+		int coordinateLinesRemoved = 0;
+
+		for (String line : lines) {
+			// Check if line matches coordinate pattern
+			if (coordinatePattern.matcher(line).matches()) {
+				coordinateLinesRemoved++;
+				continue; // Skip coordinate lines
+			}
+			// Also skip lines that are mostly numbers and commas (likely coordinates)
+			String trimmedLine = line.trim();
+			if (trimmedLine.matches("^[\\d,\\s]+$") && trimmedLine.length() > 0 && trimmedLine.split(",").length >= 3) {
+				coordinateLinesRemoved++;
+				continue;
+			}
+			filteredLines.add(line);
+		}
+
+		if (coordinateLinesRemoved > 0) {
+			log.warn("Filtered out {} coordinate lines from OCR result", coordinateLinesRemoved);
+		}
+
+		String filteredText = String.join("\n", filteredLines);
+		// If filtering removed everything, return original text (might be edge case)
+		if (filteredText.trim().isEmpty() && text.trim().length() > 0) {
+			log.warn("Filtering removed all content, returning original text");
+			return text;
+		}
+
+		return filteredText;
 	}
 
 	/**

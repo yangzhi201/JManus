@@ -293,6 +293,33 @@ public class PlanHierarchyReaderService {
 			vo.setErrorMessage(null);
 		}
 
+		// Compute latest tool info and round number from ThinkActRecords
+		try {
+			// Fetch ThinkActRecords for this agent execution
+			List<ThinkActRecordEntity> thinkActEntities = thinkActRecordRepository
+				.findByParentExecutionIdWithActToolInfo(entity.getId());
+
+			// Compute latestRoundNumber (count of think-act cycles)
+			vo.setLatestRoundNumber(thinkActEntities != null ? thinkActEntities.size() : 0);
+
+			// Compute latestMethodName and latestMethodArgs from latest ThinkActRecord
+			if (thinkActEntities != null && !thinkActEntities.isEmpty()) {
+				ThinkActRecordEntity latestThinkAct = thinkActEntities.get(thinkActEntities.size() - 1);
+				if (latestThinkAct.getActToolInfoList() != null && !latestThinkAct.getActToolInfoList().isEmpty()) {
+					ActToolInfoEntity latestTool = latestThinkAct.getActToolInfoList()
+						.get(latestThinkAct.getActToolInfoList().size() - 1);
+					vo.setLatestMethodName(latestTool.getName());
+					vo.setLatestMethodArgs(latestTool.getParameters()); // Already JSON
+																		// string
+				}
+			}
+		}
+		catch (Exception e) {
+			logger.warn("Failed to compute latest tool info for agent execution record with id: {}", entity.getId(), e);
+			// Set defaults on error
+			vo.setLatestRoundNumber(0);
+		}
+
 		// Note: subPlanExecutionRecords will be populated later when building hierarchy
 
 		return vo;

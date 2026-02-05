@@ -100,7 +100,7 @@
       </div>
 
       <!-- Loading indicator -->
-      <div v-if="isLoading" class="loading-message">
+      <div v-if="isRunning" class="loading-message">
         <div class="loading-content">
           <Icon icon="carbon:circle-dash" class="loading-icon" />
           <span>{{ $t('chat.processing') }}</span>
@@ -157,7 +157,7 @@ const { t } = useI18n()
 
 // Message dialog state
 const messageDialog = useMessageDialogSingleton()
-const { messages, isLoading, streamingMessageId, updateMessage, startStreaming, findMessage } =
+const { messages, isRunning, streamingMessageId, updateMessage, startStreaming, findMessage } =
   messageDialog
 
 // Plan execution updates are handled by useMessageDialog's watchEffect

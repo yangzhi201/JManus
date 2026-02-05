@@ -17,6 +17,7 @@ package com.alibaba.cloud.ai.lynxe.tool.searchAPI;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.searchAPI.serpapi.SerpApiProperties;
 import com.alibaba.cloud.ai.lynxe.tool.searchAPI.serpapi.SerpApiService;
@@ -265,8 +266,8 @@ public class GoogleSearch extends AbstractBaseTool<GoogleSearch.GoogleSearchInpu
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return String.format("""
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString = String.format("""
 				Google Search Status:
 				- Search Location: %s
 				- Recent Search: %s
@@ -275,6 +276,7 @@ public class GoogleSearch extends AbstractBaseTool<GoogleSearch.GoogleSearchInpu
 				lastQuery.isEmpty() ? "No search performed yet"
 						: String.format("Searched for: '%s' (max results: %d)", lastQuery, lastNumResults),
 				lastSearchResults.isEmpty() ? "No results found" : lastSearchResults);
+		return new ToolStateInfo(null, stateString);
 	}
 
 	@Override
@@ -284,7 +286,7 @@ public class GoogleSearch extends AbstractBaseTool<GoogleSearch.GoogleSearchInpu
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	/**

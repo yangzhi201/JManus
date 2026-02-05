@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.excelProcessor.IExcelProcessingService;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
@@ -40,7 +41,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 
 	private static final Logger log = LoggerFactory.getLogger(MarkdownConverterTool.class);
 
-	private static final String TOOL_NAME = "markdown_converter";
+	private static final String TOOL_NAME = "markdown-converter";
 
 	private final UnifiedDirectoryManager directoryManager;
 
@@ -79,6 +80,9 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 		@JsonProperty("forceLlmForPdf")
 		private Boolean forceLlmForPdf;
 
+		@JsonProperty("modelName")
+		private String modelName;
+
 		// Getters and setters
 		public String getFilename() {
 			return filename;
@@ -104,6 +108,14 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 			this.forceLlmForPdf = forceLlmForPdf;
 		}
 
+		public String getModelName() {
+			return modelName;
+		}
+
+		public void setModelName(String modelName) {
+			this.modelName = modelName;
+		}
+
 	}
 
 	@Override
@@ -111,9 +123,11 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 		String filename = input.getFilename();
 		String additionalRequirement = input.getAdditionalRequirement();
 		Boolean forceLlmForPdf = input.getForceLlmForPdf();
+		String modelName = input.getModelName();
 
-		log.info("MarkdownConverterTool processing file: {} with additional requirement: {}, forceLlmForPdf: {}",
-				filename, additionalRequirement, forceLlmForPdf);
+		log.info(
+				"MarkdownConverterTool processing file: {} with additional requirement: {}, forceLlmForPdf: {}, modelName: {}",
+				filename, additionalRequirement, forceLlmForPdf, modelName);
 
 		try {
 			// Step 1: Validate input
@@ -139,8 +153,9 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 			return switch (ext) {
 				case "doc", "docx" -> processWordToMarkdown(sourceFile, additionalRequirement);
 				case "xlsx", "xls" -> processExcelToMarkdown(sourceFile, additionalRequirement);
-				case "pdf" -> processPdfToMarkdown(sourceFile, additionalRequirement, forceLlmForPdf);
-				case "jpg", "jpeg", "png", "gif" -> processImageToMarkdown(sourceFile, additionalRequirement);
+				case "pdf" -> processPdfToMarkdown(sourceFile, additionalRequirement, forceLlmForPdf, modelName);
+				case "jpg", "jpeg", "png", "gif" ->
+					processImageToMarkdown(sourceFile, additionalRequirement, modelName);
 				case "eml" -> processEmlToMarkdown(sourceFile, additionalRequirement);
 				case "txt", "md", "json", "xml", "yaml", "yml", "log", "java", "py", "js", "html", "css" ->
 					processTextToMarkdown(sourceFile, additionalRequirement);
@@ -188,11 +203,11 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	 * Process PDF files to Markdown
 	 */
 	private ToolExecuteResult processPdfToMarkdown(Path sourceFile, String additionalRequirement,
-			Boolean forceLlmForPdf) {
+			Boolean forceLlmForPdf, String modelName) {
 		try {
 			PdfToMarkdownProcessor processor = new PdfToMarkdownProcessor(directoryManager, ocrProcessor);
 			boolean forceLlm = forceLlmForPdf != null && forceLlmForPdf;
-			return processor.convertToMarkdown(sourceFile, additionalRequirement, rootPlanId, forceLlm);
+			return processor.convertToMarkdown(sourceFile, additionalRequirement, rootPlanId, forceLlm, modelName);
 		}
 		catch (Exception e) {
 			log.error("PDF to Markdown conversion failed: {}", sourceFile.getFileName(), e);
@@ -203,7 +218,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	/**
 	 * Process image files to Markdown using OCR
 	 */
-	private ToolExecuteResult processImageToMarkdown(Path sourceFile, String additionalRequirement) {
+	private ToolExecuteResult processImageToMarkdown(Path sourceFile, String additionalRequirement, String modelName) {
 		try {
 			if (imageOcrProcessor == null) {
 				return new ToolExecuteResult("Error: Image OCR processor is not available");
@@ -212,7 +227,7 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 			// Generate markdown filename
 			String markdownFilename = generateMarkdownFilename(sourceFile.getFileName().toString());
 			return imageOcrProcessor.convertImageToTextWithOcr(sourceFile, additionalRequirement, rootPlanId,
-					markdownFilename);
+					markdownFilename, modelName);
 		}
 		catch (Exception e) {
 			log.error("Image to Markdown conversion failed: {}", sourceFile.getFileName(), e);
@@ -382,13 +397,13 @@ public class MarkdownConverterTool extends AbstractBaseTool<MarkdownConverterToo
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return "";
+	public ToolStateInfo getCurrentToolStateString() {
+		return new ToolStateInfo(null, "");
 	}
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "import-export";
 	}
 
 	@Override

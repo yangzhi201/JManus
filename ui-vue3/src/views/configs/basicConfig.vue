@@ -110,6 +110,7 @@
                   <div class="config-item-content vertical-layout">
                     <div class="config-item-info">
                       <div class="config-item-header">
+                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <label class="config-label">
                           {{ $t(item.displayName) || item.description }}
                           <span class="type-badge boolean">{{
@@ -123,7 +124,6 @@
                             >{{ $t('config.modified') }}</span
                           >
                         </label>
-                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                       </div>
                     </div>
                     <div class="config-control">
@@ -165,6 +165,7 @@
                   <div class="config-item-content vertical-layout">
                     <div class="config-item-info">
                       <div class="config-item-header">
+                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <label class="config-label">
                           {{ $t(item.displayName) || item.description }}
                           <span class="type-badge select">{{ $t('config.types.select') }}</span>
@@ -174,7 +175,6 @@
                             >{{ $t('config.modified') }}</span
                           >
                         </label>
-                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                       </div>
                     </div>
                     <div class="config-control">
@@ -202,6 +202,7 @@
                   <div class="config-item-content vertical-layout">
                     <div class="config-item-info">
                       <div class="config-item-header">
+                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <label class="config-label">
                           {{ $t(item.displayName) || item.description }}
                           <span class="type-badge textarea">{{ $t('config.types.textarea') }}</span>
@@ -211,7 +212,6 @@
                             >{{ $t('config.modified') }}</span
                           >
                         </label>
-                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                       </div>
                     </div>
                     <div class="config-control">
@@ -236,6 +236,7 @@
                   <div class="config-item-content vertical-layout">
                     <div class="config-item-info">
                       <div class="config-item-header">
+                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <label class="config-label">
                           {{ $t(item.displayName) || item.description }}
                           <span class="type-badge number">{{ $t('config.types.number') }}</span>
@@ -245,7 +246,6 @@
                             >{{ $t('config.modified') }}</span
                           >
                         </label>
-                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <div class="config-meta" v-if="item.min || item.max">
                           <span class="range-info">
                             {{ $t('config.range') }}: {{ item.min || 0 }} - {{ item.max || '∞' }}
@@ -274,6 +274,7 @@
                   <div class="config-item-content vertical-layout">
                     <div class="config-item-info">
                       <div class="config-item-header">
+                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                         <label class="config-label">
                           {{ $t(item.displayName) || item.description }}
                           <span class="type-badge string">{{
@@ -287,7 +288,6 @@
                             >{{ $t('config.modified') }}</span
                           >
                         </label>
-                        <span class="config-key" :title="item.configKey">{{ item.configKey }}</span>
                       </div>
                     </div>
                     <div class="config-control">
@@ -416,6 +416,9 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
   debugDetail: 'config.basicConfig.general.debugDetail',
   externalLinkedFolder: 'config.basicConfig.general.externalLinkedFolder',
   enableConversationMemory: 'config.basicConfig.general.enableConversationMemory',
+  enableSmartContentSaving: 'config.basicConfig.general.enableSmartContentSaving',
+  respectGitIgnore: 'config.basicConfig.general.respectGitIgnore',
+  bashSecurityProtection: 'config.basicConfig.general.bashSecurityProtection',
 
   // Interaction Settings
   openBrowser: 'config.basicConfig.interactionSettings.openBrowser',
@@ -424,7 +427,11 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
   maxSteps: 'config.basicConfig.agentSettings.maxSteps',
   userInputTimeout: 'config.basicConfig.agentSettings.userInputTimeout',
   maxMemory: 'config.basicConfig.agentSettings.maxMemory',
+  conversationMemoryMaxChars: 'config.basicConfig.agentSettings.conversationMemoryMaxChars',
+  executorPoolSize: 'config.basicConfig.agentSettings.executorPoolSize',
+  llmReadTimeout: 'config.basicConfig.agentSettings.llmReadTimeout',
   parallelToolCalls: 'config.basicConfig.agentSettings.parallelToolCalls',
+  maxLinesForFullRead: 'config.basicConfig.agentSettings.maxLinesForFullRead',
 
   // Infinite Context - TEMPORARILY COMMENTED OUT
   // 'enabled': ('config.basicConfig.infiniteContext.enabled'),
@@ -441,10 +448,15 @@ const CONFIG_DISPLAY_NAMES: Record<string, string> = {
 
   // Image Recognition
   poolSize: 'config.basicConfig.imageRecognition.poolSize',
-  modelName: 'config.basicConfig.imageRecognition.modelName',
+  imageRecognition_modelName: 'config.basicConfig.imageRecognition.modelName',
+  modelName: 'config.basicConfig.imageRecognition.modelName', // Fallback for backward compatibility
   dpi: 'config.basicConfig.imageRecognition.dpi',
   imageType: 'config.basicConfig.imageRecognition.imageType',
   maxRetryAttempts: 'config.basicConfig.imageRecognition.maxRetryAttempts',
+
+  // Image Generation
+  imageGeneration_modelName: 'config.basicConfig.imageGeneration.modelName',
+  imageGenerationModelName: 'config.basicConfig.imageGeneration.modelName', // Fallback for backward compatibility
 
   // System Settings (not used)
   // 'systemName': t('config.basicConfig.systemSettings.systemName'),
@@ -483,6 +495,7 @@ const SUB_GROUP_DISPLAY_NAMES: Record<string, string> = {
   filesystem: 'config.subGroupDisplayNames.filesystem',
   mcpServiceLoader: 'config.subGroupDisplayNames.mcpServiceLoader',
   imageRecognition: 'config.subGroupDisplayNames.imageRecognition',
+  imageGeneration: 'config.subGroupDisplayNames.imageGeneration',
 }
 
 // Computed property: Whether there are changes
@@ -524,6 +537,7 @@ const getConfigMax = (configKey: string): number => {
     maxThreads: 32,
     timeoutSeconds: 300,
     maxMemory: 1000,
+    conversationMemoryMaxChars: 1000000,
   }
   return maxValues[configKey] || 10000
 }
@@ -634,12 +648,21 @@ const loadAllConfigs = async () => {
         }
 
         // Set display name for each configuration item (prioritize description)
-        const processedItems: ExtendedConfigItem[] = items.map(item => ({
-          ...item,
-          displayName: CONFIG_DISPLAY_NAMES[item.configKey] || item.configKey,
-          min: getConfigMin(item.configKey),
-          max: getConfigMax(item.configKey),
-        }))
+        // Use subGroup + configKey to handle duplicate keys (e.g., modelName in different subGroups)
+        const processedItems: ExtendedConfigItem[] = items.map(item => {
+          const subGroup = item.configSubGroup ?? 'general'
+          const compositeKey = `${subGroup}_${item.configKey}`
+          const displayName =
+            CONFIG_DISPLAY_NAMES[compositeKey] ||
+            CONFIG_DISPLAY_NAMES[item.configKey] ||
+            item.configKey
+          return {
+            ...item,
+            displayName,
+            min: getConfigMin(item.configKey),
+            max: getConfigMax(item.configKey),
+          }
+        })
 
         // Cache original values
         processedItems.forEach(item => {
@@ -1109,8 +1132,8 @@ onMounted(() => {
 }
 
 .config-label {
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.9);
+  font-weight: normal;
+  color: rgba(255, 255, 255, 0.6);
   margin-bottom: 4px;
   display: flex;
   align-items: center;
@@ -1121,19 +1144,18 @@ onMounted(() => {
 /* Label style in vertical layout */
 .vertical-layout .config-label {
   margin-bottom: 0;
-  font-size: 14px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .config-key {
   display: block;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-  margin-bottom: 6px;
+  font-size: 14px;
+  color: #ffffff;
+  font-weight: bold;
+  margin-bottom: 8px;
   font-family: monospace;
-  background: rgba(255, 255, 255, 0.05);
-  padding: 2px 6px;
-  border-radius: 4px;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1142,8 +1164,8 @@ onMounted(() => {
 
 /* Configuration key style in vertical layout */
 .vertical-layout .config-key {
-  margin-bottom: 0;
-  display: inline-block;
+  margin-bottom: 8px;
+  display: block;
   max-width: fit-content;
 }
 

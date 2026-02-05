@@ -27,8 +27,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
-import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.observation.ChatModelObservationConvention;
 import org.springframework.ai.model.SimpleApiKey;
 import org.springframework.ai.model.tool.DefaultToolExecutionEligibilityPredicate;
@@ -46,6 +46,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import com.alibaba.cloud.ai.lynxe.agent.fix.DynamicAgentStreamingFix;
 import com.alibaba.cloud.ai.lynxe.event.LynxeListener;
 import com.alibaba.cloud.ai.lynxe.event.ModelChangeEvent;
 import com.alibaba.cloud.ai.lynxe.model.entity.DynamicModelEntity;
@@ -67,8 +68,6 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 	private final Map<String, ChatClient> chatClientCache = new ConcurrentHashMap<>();
 
 	private ChatMemory conversationMemory;
-
-	private ChatMemory agentMemory;
 
 	/*
 	 * Required for creating custom chatModel
@@ -103,6 +102,15 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 	@Autowired(required = false)
 	private ConversationMemoryLimitService conversationMemoryLimitService;
 
+	@Autowired(required = false)
+	private TokenCountService tokenCountService;
+
+	@Autowired(required = false)
+	private TokenLimitService tokenLimitService;
+
+	@Autowired(required = false)
+	private DynamicAgentStreamingFix dynamicAgentStreamingFix;
+
 	public LlmService() {
 	}
 
@@ -114,12 +122,19 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 	 */
 	private ChatClient buildUnifiedChatClient(String modelName, DynamicModelEntity model, OpenAiChatOptions options) {
 		// Use the existing openAiChatModel method which calls openAiApi()
-		OpenAiChatModel chatModel = openAiChatModel(modelName, model, options);
+		ChatModel chatModel = openAiChatModel(modelName, model, options);
 
-		return ChatClient.builder(chatModel)
+		var builder = ChatClient.builder(chatModel)
 			.defaultAdvisors(new SimpleLoggerAdvisor())
-			.defaultOptions(OpenAiChatOptions.fromOptions(options))
-			.build();
+			.defaultOptions(OpenAiChatOptions.fromOptions(options));
+
+		// Add streaming fix advisor if available
+		// StreamAdvisor can be added via defaultAdvisors as it extends Advisor
+		if (dynamicAgentStreamingFix != null) {
+			builder.defaultAdvisors(dynamicAgentStreamingFix);
+		}
+
+		return builder.build();
 	}
 
 	private void initializeChatClientsWithModel(DynamicModelEntity model) {
@@ -188,7 +203,6 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 
 		// Use unified ChatOptions creation
 		OpenAiChatOptions defaultOptions = OpenAiChatOptions.builder().build();
-		defaultOptions.setInternalToolExecutionEnabled(false);
 
 		// Use unified ChatClient builder
 		ChatClient client = buildUnifiedChatClient(modelName, defaultModel, defaultOptions);
@@ -198,23 +212,6 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 
 		log.info("Build and cache dynamic chat client for model: {}", cacheKey);
 		return client;
-	}
-
-	public ChatMemory getAgentMemory(Integer maxMessages) {
-		if (agentMemory == null) {
-			agentMemory = MessageWindowChatMemory.builder()
-				// in memory use by agent
-				.chatMemoryRepository(new InMemoryChatMemoryRepository())
-				.maxMessages(maxMessages)
-				.build();
-		}
-		return agentMemory;
-	}
-
-	public void clearAgentMemory(String memoryId) {
-		if (this.agentMemory != null) {
-			this.agentMemory.clear(memoryId);
-		}
 	}
 
 	public ChatClient getDiaChatClient() {
@@ -228,6 +225,33 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 			}
 		}
 		return diaChatClient;
+	}
+
+	/**
+	 * Get the current default model name.
+	 * @return Model name, or null if not initialized
+	 */
+	public String getDefaultModelName() {
+		if (defaultModel == null) {
+			tryLazyInitialization();
+		}
+		return defaultModel != null ? defaultModel.getModelName() : null;
+	}
+
+	/**
+	 * Get token count service.
+	 * @return TokenCountService, or null if not available
+	 */
+	public TokenCountService getTokenCountService() {
+		return tokenCountService;
+	}
+
+	/**
+	 * Get token limit service.
+	 * @return TokenLimitService, or null if not available
+	 */
+	public TokenLimitService getTokenLimitService() {
+		return tokenLimitService;
 	}
 
 	public void clearConversationMemory(String memoryId) {
@@ -364,12 +388,12 @@ public class LlmService implements LynxeListener<ModelChangeEvent> {
 		if (headers == null) {
 			headers = new HashMap<>();
 		}
-		headers.put("User-Agent", "Lynxe/4.8.0");
+		headers.put("User-Agent", "Lynxe/4.10.0");
 		defaultOptions.setHttpHeaders(headers);
 		var openAiApi = openAiApi(restClientBuilderProvider.getIfAvailable(RestClient::builder),
 				webClientBuilderProvider.getIfAvailable(WebClient::builder), dynamicModelEntity);
 		OpenAiChatOptions options = OpenAiChatOptions.fromOptions(defaultOptions);
-		var chatModel = OpenAiChatModel.builder()
+		OpenAiChatModel chatModel = OpenAiChatModel.builder()
 			.openAiApi(openAiApi)
 			.defaultOptions(options)
 			// .toolCallingManager(toolCallingManager)

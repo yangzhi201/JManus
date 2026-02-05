@@ -23,7 +23,11 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
@@ -72,12 +76,60 @@ public class MacShellExecutor implements ShellCommandExecutor {
 				// Set environment variables
 				pb.environment().put("LANG", "en_US.UTF-8");
 				pb.environment().put("PATH", System.getenv("PATH") + ":/usr/local/bin");
+				// Disable all pagers to ensure direct output without pagination
+				pb.environment().put("PAGER", "cat");
+				pb.environment().put("GIT_PAGER", "cat");
+				pb.environment().put("MANPAGER", "cat");
+				pb.environment().put("LESS", "-R");
+				pb.environment().put("MORE", "-R");
 
 				currentProcess = pb.start();
 				processInput = new BufferedWriter(new OutputStreamWriter(currentProcess.getOutputStream()));
 
-				// Set timeout handling
+				// Start reading output immediately to prevent deadlocks
+				// Read output while process is running, not after it completes
+				StringBuilder outputBuilder = new StringBuilder();
+				StringBuilder errorBuilder = new StringBuilder();
+
+				// Use ExecutorService to read stdout and stderr concurrently
+				ExecutorService executor = Executors.newFixedThreadPool(2);
+
 				try {
+					// Read standard output in a separate thread
+					Future<StringBuilder> stdoutFuture = executor.submit(() -> {
+						StringBuilder builder = new StringBuilder();
+						try (BufferedReader reader = new BufferedReader(
+								new InputStreamReader(currentProcess.getInputStream(), "UTF-8"))) {
+							String line;
+							while ((line = reader.readLine()) != null) {
+								log.info(line);
+								builder.append(line).append("\n");
+							}
+						}
+						catch (IOException e) {
+							log.error("Error reading stdout", e);
+						}
+						return builder;
+					});
+
+					// Read error output in a separate thread
+					Future<StringBuilder> stderrFuture = executor.submit(() -> {
+						StringBuilder builder = new StringBuilder();
+						try (BufferedReader errorReader = new BufferedReader(
+								new InputStreamReader(currentProcess.getErrorStream(), "UTF-8"))) {
+							String line;
+							while ((line = errorReader.readLine()) != null) {
+								log.error(line);
+								builder.append(line).append("\n");
+							}
+						}
+						catch (IOException e) {
+							log.error("Error reading stderr", e);
+						}
+						return builder;
+					});
+
+					// Wait for process to complete with timeout
 					if (!command.endsWith("&")) { // Only set timeout for non-background
 													// commands
 						if (!currentProcess.waitFor(DEFAULT_TIMEOUT, TimeUnit.SECONDS)) {
@@ -90,11 +142,56 @@ public class MacShellExecutor implements ShellCommandExecutor {
 							return execute(Collections.singletonList(command), workingDir).get(0);
 						}
 					}
-					return processOutput(currentProcess);
+
+					// Wait for both reading threads to complete (with timeout to prevent
+					// hanging)
+					try {
+						outputBuilder = stdoutFuture.get(5, TimeUnit.SECONDS);
+					}
+					catch (TimeoutException e) {
+						log.warn("Timeout waiting for stdout reader, forcing shutdown");
+						stdoutFuture.cancel(true);
+					}
+
+					try {
+						errorBuilder = stderrFuture.get(5, TimeUnit.SECONDS);
+					}
+					catch (TimeoutException e) {
+						log.warn("Timeout waiting for stderr reader, forcing shutdown");
+						stderrFuture.cancel(true);
+					}
 				}
 				catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 					return "Error: Process interrupted - " + e.getMessage();
+				}
+				catch (Exception e) {
+					log.error("Error reading process output", e);
+				}
+				finally {
+					executor.shutdown();
+					try {
+						if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+							executor.shutdownNow();
+						}
+					}
+					catch (InterruptedException e) {
+						executor.shutdownNow();
+						Thread.currentThread().interrupt();
+					}
+				}
+
+				// Return result based on exit code
+				int exitCode = currentProcess.isAlive() ? -1 : currentProcess.exitValue();
+				if (exitCode == 0) {
+					return outputBuilder.toString();
+				}
+				else if (exitCode == -1) {
+					return "Process is still running. Use empty command to get more logs, or 'ctrl+c' to terminate.";
+				}
+				else {
+					return "Error (Exit Code " + exitCode + "): "
+							+ (errorBuilder.length() > 0 ? errorBuilder.toString() : outputBuilder.toString());
 				}
 			}
 			catch (Throwable e) {
@@ -189,22 +286,77 @@ public class MacShellExecutor implements ShellCommandExecutor {
 		StringBuilder outputBuilder = new StringBuilder();
 		StringBuilder errorBuilder = new StringBuilder();
 
-		// Read standard output
-		try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
-				log.info(line);
-				outputBuilder.append(line).append("\n");
+		// Use ExecutorService to read stdout and stderr concurrently to prevent deadlocks
+		ExecutorService executor = Executors.newFixedThreadPool(2);
+
+		try {
+			// Read standard output in a separate thread
+			Future<StringBuilder> stdoutFuture = executor.submit(() -> {
+				StringBuilder builder = new StringBuilder();
+				try (BufferedReader reader = new BufferedReader(
+						new InputStreamReader(process.getInputStream(), "UTF-8"))) {
+					String line;
+					while ((line = reader.readLine()) != null) {
+						log.info(line);
+						builder.append(line).append("\n");
+					}
+				}
+				catch (IOException e) {
+					log.error("Error reading stdout", e);
+				}
+				return builder;
+			});
+
+			// Read error output in a separate thread
+			Future<StringBuilder> stderrFuture = executor.submit(() -> {
+				StringBuilder builder = new StringBuilder();
+				try (BufferedReader errorReader = new BufferedReader(
+						new InputStreamReader(process.getErrorStream(), "UTF-8"))) {
+					String line;
+					while ((line = errorReader.readLine()) != null) {
+						log.error(line);
+						builder.append(line).append("\n");
+					}
+				}
+				catch (IOException e) {
+					log.error("Error reading stderr", e);
+				}
+				return builder;
+			});
+
+			// Wait for both threads to complete with timeout to prevent hanging
+			try {
+				outputBuilder = stdoutFuture.get(5, TimeUnit.SECONDS);
+			}
+			catch (TimeoutException e) {
+				log.warn("Timeout waiting for stdout reader, forcing shutdown");
+				stdoutFuture.cancel(true);
+			}
+
+			try {
+				errorBuilder = stderrFuture.get(5, TimeUnit.SECONDS);
+			}
+			catch (TimeoutException e) {
+				log.warn("Timeout waiting for stderr reader, forcing shutdown");
+				stderrFuture.cancel(true);
 			}
 		}
-
-		// Read error output
-		try (BufferedReader errorReader = new BufferedReader(
-				new InputStreamReader(process.getErrorStream(), "UTF-8"))) {
-			String line;
-			while ((line = errorReader.readLine()) != null) {
-				log.error(line);
-				errorBuilder.append(line).append("\n");
+		catch (Exception e) {
+			log.error("Error reading process output", e);
+			if (e instanceof InterruptedException) {
+				Thread.currentThread().interrupt();
+			}
+		}
+		finally {
+			executor.shutdown();
+			try {
+				if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+					executor.shutdownNow();
+				}
+			}
+			catch (InterruptedException e) {
+				executor.shutdownNow();
+				Thread.currentThread().interrupt();
 			}
 		}
 

@@ -55,10 +55,11 @@ public class PdfToMarkdownProcessor {
 	 * @param sourceFile The source PDF file
 	 * @param additionalRequirement Optional additional requirements for conversion
 	 * @param currentPlanId Current plan ID for file operations
+	 * @param modelName Optional model name to override default configuration
 	 * @return ToolExecuteResult with OCR conversion status
 	 */
 	private ToolExecuteResult convertToMarkdownWithOcr(Path sourceFile, String additionalRequirement,
-			String currentPlanId) {
+			String currentPlanId, String modelName) {
 		try {
 			log.info("Converting PDF file to Markdown using OCR: {}", sourceFile.getFileName());
 
@@ -68,7 +69,7 @@ public class PdfToMarkdownProcessor {
 
 			// Use OCR processor to extract text directly to markdown file
 			ToolExecuteResult ocrResult = ocrProcessor.convertPdfToTextWithOcr(sourceFile, additionalRequirement,
-					currentPlanId, markdownFilename);
+					currentPlanId, markdownFilename, modelName);
 
 			if (!ocrResult.getOutput().toLowerCase().contains("successfully")) {
 				return ocrResult; // Return OCR error
@@ -91,24 +92,15 @@ public class PdfToMarkdownProcessor {
 	 * @param sourceFile The source PDF file
 	 * @param additionalRequirement Optional additional requirements for conversion
 	 * @param currentPlanId Current plan ID for file operations
-	 * @return ToolExecuteResult with conversion status
-	 */
-	public ToolExecuteResult convertToMarkdown(Path sourceFile, String additionalRequirement, String currentPlanId) {
-		return convertToMarkdown(sourceFile, additionalRequirement, currentPlanId, false);
-	}
-
-	/**
-	 * Convert PDF file to Markdown using traditional text extraction or OCR
-	 * @param sourceFile The source PDF file
-	 * @param additionalRequirement Optional additional requirements for conversion
-	 * @param currentPlanId Current plan ID for file operations
 	 * @param forceLlm If true, force using LLM/OCR processing instead of auto-detection
+	 * @param modelName Optional model name to override default configuration
 	 * @return ToolExecuteResult with conversion status
 	 */
 	public ToolExecuteResult convertToMarkdown(Path sourceFile, String additionalRequirement, String currentPlanId,
-			boolean forceLlm) {
+			boolean forceLlm, String modelName) {
 		try {
-			log.info("Converting PDF file to Markdown: {}, forceLlm: {}", sourceFile.getFileName(), forceLlm);
+			log.info("Converting PDF file to Markdown: {}, forceLlm: {}, modelName: {}", sourceFile.getFileName(),
+					forceLlm, modelName);
 
 			// Step 0: Check if content.md already exists
 			String originalFilename = sourceFile.getFileName().toString();
@@ -122,7 +114,7 @@ public class PdfToMarkdownProcessor {
 			// Step 1: If forceLlm is true, directly use OCR processing
 			if (forceLlm) {
 				log.info("Force LLM/OCR processing requested for PDF: {}", sourceFile.getFileName());
-				return convertToMarkdownWithOcr(sourceFile, additionalRequirement, currentPlanId);
+				return convertToMarkdownWithOcr(sourceFile, additionalRequirement, currentPlanId, modelName);
 			}
 
 			// Step 2: Try traditional text extraction first
@@ -131,7 +123,7 @@ public class PdfToMarkdownProcessor {
 			// Step 3: Check if OCR processing is needed
 			if (needsOcrProcessing(sourceFile, content)) {
 				log.info("OCR processing needed for PDF: {}", sourceFile.getFileName());
-				return convertToMarkdownWithOcr(sourceFile, additionalRequirement, currentPlanId);
+				return convertToMarkdownWithOcr(sourceFile, additionalRequirement, currentPlanId, modelName);
 			}
 
 			// Step 4: Convert content to Markdown format

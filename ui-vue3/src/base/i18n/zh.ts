@@ -41,7 +41,8 @@ const words: I18nType = {
     customModeDesc: '配置任何兼容 OpenAI API 格式的服务，如 Ollama、LocalAI 等',
     apiKeyLabel: 'DashScope API 密钥',
     apiKeyPlaceholder: '请输入您的 API 密钥',
-    apiKeyHint: '您可以从阿里云百炼控制台获取 API 密钥。',
+    apiKeyHint:
+      '您可以从阿里云百炼控制台获取 API 密钥。新用户可享受 100万Token 输入和 100万Token 输出的免费额度（有效期90天）。',
     getApiKey: '获取 API 密钥',
     showApiKey: '显示 API 密钥',
     hideApiKey: '隐藏 API 密钥',
@@ -106,6 +107,9 @@ const words: I18nType = {
     download: '下载',
     downloadToView: '下载查看',
     binaryFile: '这是一个二进制文件，无法在查看器中显示。',
+    downloadOnlyFile: '此文件类型需要下载后才能查看（如 Office 文档、PDF 等）。',
+    markdownRaw: '切换到格式化视图',
+    markdownFormatted: '切换到原始视图',
     open: '打开',
     copyPath: '复制路径',
     noPlanSelected: '未选择计划。请执行任务以查看文件。',
@@ -113,7 +117,7 @@ const words: I18nType = {
     waitingForFiles: 'AI 模型正在处理您的请求，生成的文件将在此处显示。',
     filesTip: '分析结果、报告和数据导出等生成的文件将显示在此文件浏览器中。',
     noPlanExecuting: '当前没有执行中的任务。',
-    startTaskTip: '请在左侧对话框中发起任务，生成的文件将在此处显示。',
+    startTaskTip: '请在右侧对话框中发起任务，生成的文件将在此处显示。',
     waitingForGeneration: '等待文件生成',
     planExecuting: 'AI 模型正在执行计划并生成文件。',
     checking: '检查中...',
@@ -198,6 +202,7 @@ const words: I18nType = {
       model: 'Model配置',
       mcp: 'Tools/MCP配置',
       database: '数据库配置',
+      databaseCleanup: '数据库清理',
       namespace: '命名空间配置',
       planTemplate: '计划模板管理',
     },
@@ -213,6 +218,7 @@ const words: I18nType = {
       filesystem: '文件系统',
       mcpServiceLoader: 'MCP服务加载器',
       imageRecognition: '图像识别',
+      imageGeneration: '图像生成',
     },
     // Model配置页面
     modelConfig: {
@@ -377,6 +383,11 @@ const words: I18nType = {
       exportFailed: '导出失败',
       statusToggleSuccess: '状态切换成功',
       statusToggleFailed: '状态切换失败',
+      connectionStatus: {
+        connected: '已连接',
+        disconnected: '未连接',
+        error: '错误',
+      },
       missingUrlField: '缺少url字段: {serverId} - 没有command时必须有url或baseUrl',
       urlFieldTip: '💡 需要提供 url 或 baseUrl 字段',
       serverConfigWarning: 'Server {serverId} has no command but also no url or baseUrl',
@@ -440,6 +451,36 @@ const words: I18nType = {
       deleteConfirm: '删除确认',
       deleteMessage: '确定要删除配置 "{name}" 吗？此操作不可恢复。',
     },
+    // 数据库清理页面
+    databaseCleanup: {
+      title: '历史记录统计与清理',
+      description:
+        '这里是所有的历史聊天记录的情况，你可以查看他们的数量，也可以选择清空，选择清空后系统可以保持干净的状态，但对话就都没了，谨慎选择。',
+      tableName: '表名',
+      rowCount: '行数',
+      refresh: '刷新',
+      clearAll: '清除所有表',
+      clearConfirm: '确认清空历史记录？',
+      clearMessage:
+        '这将永久删除以下表中的所有历史记录。此操作无法撤销，清空后系统可以保持干净的状态，但对话就都没了，请谨慎选择。',
+      clearSuccess: '所有表已成功清除',
+      clearFailed: '清除表失败',
+      refreshSuccess: '计数已刷新',
+      refreshFailed: '刷新计数失败',
+      allEmpty: '所有表均为空',
+      rows: '行',
+      tableDescriptions: {
+        actToolInfo: '工具调用详情 - 存储工具名称、参数（JSON）和执行结果。每次工具调用都会增长。',
+        thinkActRecord:
+          '思考-行动循环 - 记录代理执行过程中的每个思考-行动循环，包括思考输入/输出、行动结果和令牌计数。每个代理步骤都会增长。',
+        planExecutionRecord:
+          '计划执行 - 跟踪高级计划执行元数据、用户请求和执行摘要。每次计划执行都会增长。',
+        agentExecutionRecord:
+          '代理执行 - 记录计划步骤中的代理执行，包括代理信息、执行状态和结果。每次代理调用都会增长。',
+        aiChatMemory:
+          '聊天消息 - 存储对话消息。每条消息都会增长。这是与基于计划的系统并行的替代存储机制。',
+      },
+    },
     // 基础配置
     basicConfig: {
       title: '基础配置',
@@ -453,6 +494,12 @@ const words: I18nType = {
         externalLinkedFolder:
           '外部目录映射 : 你可以指定一个外部的目录，系统会把这个目录映射到每个任务的一个子目录下面，这样就可以不需要将内容导入。 你可以用 带/或者不带/的绝对目录。映射后的目录可以通过 linked_external 子目录访问。',
         enableConversationMemory: '开启对话记忆',
+        enableSmartContentSaving:
+          '打开则系统会自动将所有超长的内容转存文件，以保护记忆不会超长，但需要你引入文件读取工具，来做后续处理。',
+        respectGitIgnore:
+          '是否遵循 .gitignore 规则：开启后，文件搜索（grep）等操作会自动忽略 .gitignore 文件中指定的文件和目录，避免搜索到不应该处理的文件（如 node_modules、.git 等）。建议保持开启状态。',
+        bashSecurityProtection:
+          'bash 安全保护：开启后会阻止所有 rm 命令的执行，因为 rm 删除的文件极难恢复。如果设置为 false，则不会阻止 rm 命令，请谨慎使用。建议保持开启状态以保护数据安全。',
       },
       interactionSettings: {
         openBrowser: '启动时自动打开浏览器',
@@ -461,7 +508,15 @@ const words: I18nType = {
         maxSteps: '智能体执行最大步数',
         userInputTimeout: '用户输入表单等待超时时间(秒)',
         maxMemory: '能记住的最大消息数',
-        parallelToolCalls: '并行工具调用',
+        conversationMemoryMaxChars:
+          '单agent的最大 memory记忆阈值，超过这个数值系统会自动压缩记忆，保持记忆字符数在当前阈值内。',
+        executorPoolSize:
+          '执行器的核心大小，func-Agent可并行执行的数量，不建议过大3~5合适，瓶颈是llm端的并行调用限流。',
+        llmReadTimeout: 'llm读请求超时，是socket最核心的超时时间，默认是120秒',
+        parallelToolCalls:
+          '并行工具调用，打开的话会引导模型做并行的tools调用，不过模型有时候不是很聪明，并行容易出现不少错误，默认关闭',
+        maxLinesForFullRead:
+          '完整文件读取的最大行数限制（不使用offset/limit时）。当文件超过此限制时，用户必须使用offset/limit参数或设置bypass_limit=true来读取整个文件。默认值为1。',
       },
       // infiniteContext: { // 临时注释掉
       //   enabled: '是否开启无限上下文',
@@ -483,11 +538,9 @@ const words: I18nType = {
         imageType: '图像类型',
         maxRetryAttempts: '最大重试次数',
       },
-      versionInfo: {
-        title: '版本信息',
-        version: '版本号',
-        buildTime: '构建时间',
-        currentTime: '当前时间',
+      imageGeneration: {
+        modelName:
+          '模型名称。指定用于图像生成的模型名称。\n\n【DashScope Wanx 模型】\n文本生成图片：wan2.6-t2i, wan2.5-t2i-preview, wan2.2-t2i-plus, wan2.2-t2i-flash, wanx2.1-t2i-plus, wanx2.1-t2i-turbo, wanx2.0-t2i-turbo, wanx-v1\n图片生成和编辑：wan2.6-image, wan2.5-i2i-preview, wanx2.1-imageedit\n其他功能：wanx-sketch-to-image-lite, wanx-x-painting, wanx-style-repaint-v1, wanx-background-generation-v2, image-out-painting, wanx-virtualmodel, virtualmodel-v2, shoemodel-v1, wanx-poster-generation-v1\n\n【DashScope Qwen 模型】\n图片生成：qwen-image-plus, qwen-image\n图片编辑：qwen-image-edit-plus, qwen-image-edit-plus-2025-10-30, qwen-image-edit',
       },
       systemSettings: {
         systemName: '系统名称',
@@ -577,6 +630,12 @@ const words: I18nType = {
       importConfirm: '这将覆盖具有相同 planTemplateId 的现有模板。是否继续？',
       invalidFormat: '文件格式无效。应为计划模板的 JSON 数组。',
       loadFailed: '加载计划模板失败',
+    },
+    versionInfo: {
+      title: '版本信息',
+      version: '版本号',
+      buildTime: '构建时间',
+      currentTime: '当前时间',
     },
   },
 
@@ -695,6 +754,7 @@ const words: I18nType = {
     thinkingAnalyzing: '正在分析任务需求...',
     thinkingExecuting: '正在执行: {title}',
     thinkingResponse: '正在组织语言回复您...',
+    waitingForResponse: '等待回复中...',
     planningExecution: '正在规划和执行您的请求...',
     copyResponse: '复制回复',
     regenerateResponse: '重新生成回复',
@@ -739,6 +799,14 @@ const words: I18nType = {
     userInputRequired: '需要用户输入',
     funcAgentExecutionDetails: 'Func-Agent 执行详情',
     clickToViewExecutionDetails: '点击查看执行详情',
+    currentFuncAgentExecutionRound: 'Func-Agent 执行轮次：{round}',
+    latestToolInfo: '最新工具信息',
+    roundNumber: '轮次',
+    roundLabel: '轮次 {round}',
+    methodName: '当前方法',
+    methodArgs: '方法参数',
+    userRequest: '用户请求',
+    currentLatestExecutionPlan: '当前最新执行计划',
   },
 
   // 输入组件
@@ -827,8 +895,6 @@ const words: I18nType = {
     serviceGroup: '服务组',
     organizationMethod: '组织方式',
     organizationLabel: '组织：',
-    organizationByTime: '按修改时间',
-    organizationByAbc: '按ABC字符排序',
     organizationByGroupTime: '按服务组名和修改时间',
     organizationByGroupAbc: '按服务组名和ABC字符排序',
     ungroupedMethods: '未分组方法',
@@ -975,6 +1041,11 @@ const words: I18nType = {
     networkError: '网络错误',
     apiError: 'API调用失败',
     resizeHint: '拖拽调整大小',
+    cannotSaveNonExistentTools: '无法保存计划模板：某些工具不存在。',
+    cannotExecuteNonExistentTools: '无法执行计划：某些工具不存在。',
+    nonExistentToolsHeader: '不存在的工具：',
+    nonExistentToolStep: '步骤 {stepNumber}：{toolName}',
+    toolNotExistWarning: '此工具不存在，可能不可用',
   },
 
   // 工具选择

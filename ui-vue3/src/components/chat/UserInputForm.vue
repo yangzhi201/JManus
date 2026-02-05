@@ -24,9 +24,11 @@
       {{ userInputWaitState?.title ?? $t('chat.userInput.message') }}
     </p>
 
-    <p v-if="userInputWaitState?.formDescription" class="form-description">
-      {{ userInputWaitState?.formDescription }}
-    </p>
+    <div
+      v-if="userInputWaitState?.formDescription"
+      class="form-description"
+      v-html="formattedDescription"
+    ></div>
 
     <form @submit.prevent="handleUserInputSubmit" class="user-input-form">
       <template v-if="userInputWaitState?.formInputs && userInputWaitState.formInputs.length > 0">
@@ -185,11 +187,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onUnmounted } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { Icon } from '@iconify/vue'
 import { CommonApiService } from '@/api/common-api-service'
+import { useMessageFormatting } from '@/components/chat/composables/useMessageFormatting'
 import type { UserInputWaitState } from '@/types/plan-execution-record'
+import { Icon } from '@iconify/vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 interface Props {
   userInputWaitState?: UserInputWaitState
@@ -206,6 +209,17 @@ const emit = defineEmits<Emits>()
 
 // Initialize i18n
 useI18n()
+
+// Initialize message formatting for Markdown rendering
+const { formatResponseText } = useMessageFormatting()
+
+// Format form description as Markdown
+const formattedDescription = computed(() => {
+  if (!props.userInputWaitState?.formDescription) {
+    return ''
+  }
+  return formatResponseText(props.userInputWaitState.formDescription)
+})
 
 // Local state
 const formInputsStore = reactive<Record<number, string | string[]>>({})
@@ -367,7 +381,94 @@ onUnmounted(() => {
     margin-bottom: 16px;
     color: #aaaaaa;
     font-size: 13px;
-    line-height: 1.4;
+    line-height: 1.6;
+
+    // Markdown content styling
+    :deep(h1),
+    :deep(h2),
+    :deep(h3),
+    :deep(h4),
+    :deep(h5),
+    :deep(h6) {
+      color: #ffffff;
+      margin-top: 12px;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    :deep(h1) {
+      font-size: 18px;
+    }
+
+    :deep(h2) {
+      font-size: 16px;
+    }
+
+    :deep(h3) {
+      font-size: 15px;
+    }
+
+    :deep(p) {
+      margin-bottom: 8px;
+    }
+
+    :deep(code) {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #f0f0f0;
+    }
+
+    :deep(pre) {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin-bottom: 12px;
+    }
+
+    :deep(pre code) {
+      background: transparent;
+      padding: 0;
+    }
+
+    :deep(ul),
+    :deep(ol) {
+      margin-left: 20px;
+      margin-bottom: 8px;
+    }
+
+    :deep(li) {
+      margin-bottom: 4px;
+    }
+
+    :deep(blockquote) {
+      border-left: 3px solid #667eea;
+      padding-left: 12px;
+      margin-left: 0;
+      color: #cccccc;
+      font-style: italic;
+    }
+
+    :deep(a) {
+      color: #667eea;
+      text-decoration: none;
+    }
+
+    :deep(a:hover) {
+      text-decoration: underline;
+    }
+
+    :deep(strong) {
+      color: #ffffff;
+      font-weight: 600;
+    }
+
+    :deep(em) {
+      font-style: italic;
+    }
   }
 
   .user-input-form {

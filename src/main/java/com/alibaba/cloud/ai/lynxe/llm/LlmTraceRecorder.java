@@ -38,9 +38,11 @@ public class LlmTraceRecorder {
 
 	private final String requestId;
 
-	private Integer inputCharCount;
+	private TokenCountService tokenCountService;
 
-	private Integer outputCharCount;
+	private Integer inputTokenCount;
+
+	private Integer outputTokenCount;
 
 	/**
 	 * Create a new LlmTraceRecorder instance for a request
@@ -49,37 +51,53 @@ public class LlmTraceRecorder {
 	public LlmTraceRecorder(ObjectMapper objectMapper) {
 		this.objectMapper = objectMapper;
 		this.requestId = UUID.randomUUID().toString();
-		this.inputCharCount = 0;
-		this.outputCharCount = 0;
+		this.inputTokenCount = 0;
+		this.outputTokenCount = 0;
+	}
+
+	/**
+	 * Create a new LlmTraceRecorder instance for a request with TokenCountService
+	 * @param objectMapper ObjectMapper for JSON serialization
+	 * @param tokenCountService TokenCountService for accurate token counting
+	 */
+	public LlmTraceRecorder(ObjectMapper objectMapper, TokenCountService tokenCountService) {
+		this.objectMapper = objectMapper;
+		this.tokenCountService = tokenCountService;
+		this.requestId = UUID.randomUUID().toString();
+		this.inputTokenCount = 0;
+		this.outputTokenCount = 0;
 	}
 
 	public void recordRequest(OpenAiApi.ChatCompletionRequest chatRequest) {
 		try {
 			logger.info("Request[{}]: {}", requestId, objectMapper.writer().writeValueAsString(chatRequest));
 
-			// Calculate input character count from all messages in the request
+			// Calculate input token count from all messages in the request
 			int count = 0;
 			if (chatRequest != null && chatRequest.messages() != null) {
-				for (OpenAiApi.ChatCompletionMessage message : chatRequest.messages()) {
-					try {
-						// Try to get content as string (works for text-only messages)
-						String content = message.content();
-						if (content != null) {
-							count += content.length();
+				if (tokenCountService != null) {
+					// Use TokenCountService for accurate token counting
+					String requestJson = objectMapper.writer().writeValueAsString(chatRequest);
+					count = tokenCountService.countTokens(requestJson);
+				}
+				else {
+					// Fallback to approximate character-based estimation
+					for (OpenAiApi.ChatCompletionMessage message : chatRequest.messages()) {
+						try {
+							String content = message.content();
+							if (content != null) {
+								count += (int) Math.ceil(content.length() / 4.0);
+							}
 						}
-					}
-					catch (IllegalStateException e) {
-						// Content is not a string (e.g., contains media/images)
-						// For media content, we can't easily count characters, so we skip
-						// it
-						// or use a placeholder count. For now, we'll skip it.
-						selfLogger
-							.debug("Message contains non-string content (likely media), skipping character count");
+						catch (IllegalStateException e) {
+							selfLogger
+								.debug("Message contains non-string content (likely media), skipping token count");
+						}
 					}
 				}
 			}
-			this.inputCharCount = count;
-			logger.info("Request[{}] InputCharCount: {}", requestId, count);
+			this.inputTokenCount = count;
+			logger.info("Request[{}] InputTokenCount: {}", requestId, count);
 		}
 		catch (Throwable e) {
 			selfLogger.error("Failed to serialize chat request", e);
@@ -91,8 +109,15 @@ public class LlmTraceRecorder {
 			String responseJson = objectMapper.writer().writeValueAsString(chatResponse);
 			logger.info("Response[{}]: {}", requestId, objectMapper.writer().writeValueAsString(chatResponse));
 
-			this.outputCharCount = responseJson.length();
-			logger.info("Response[{}] OutputCharCount: {}", requestId, this.outputCharCount);
+			// Calculate output token count
+			if (tokenCountService != null) {
+				this.outputTokenCount = tokenCountService.countTokens(responseJson);
+			}
+			else {
+				// Fallback to approximate character-based estimation
+				this.outputTokenCount = (int) Math.ceil(responseJson.length() / 4.0);
+			}
+			logger.info("Response[{}] OutputTokenCount: {}", requestId, this.outputTokenCount);
 		}
 		catch (Throwable e) {
 			selfLogger.error("Failed to serialize chat response", e);
@@ -129,27 +154,54 @@ public class LlmTraceRecorder {
 	}
 
 	/**
-	 * Set input character count (can be called if count is calculated elsewhere)
-	 * @param count Input character count
+	 * Set input token count (can be called if count is calculated elsewhere)
+	 * @param count Input token count
 	 */
+	public void setInputTokenCount(int count) {
+		this.inputTokenCount = count;
+	}
+
+	/**
+	 * Get input token count for this request
+	 * @return Input token count, or 0 if not available
+	 */
+	public int getInputTokenCount() {
+		return inputTokenCount != null ? inputTokenCount : 0;
+	}
+
+	/**
+	 * Get output token count for this request
+	 * @return Output token count, or 0 if not available
+	 */
+	public int getOutputTokenCount() {
+		return outputTokenCount != null ? outputTokenCount : 0;
+	}
+
+	/**
+	 * @deprecated Use setInputTokenCount() instead. This method is kept for backward
+	 * compatibility.
+	 */
+	@Deprecated
 	public void setInputCharCount(int count) {
-		this.inputCharCount = count;
+		this.inputTokenCount = count;
 	}
 
 	/**
-	 * Get input character count for this request
-	 * @return Input character count, or 0 if not available
+	 * @deprecated Use getInputTokenCount() instead. This method is kept for backward
+	 * compatibility.
 	 */
+	@Deprecated
 	public int getInputCharCount() {
-		return inputCharCount != null ? inputCharCount : 0;
+		return inputTokenCount != null ? inputTokenCount : 0;
 	}
 
 	/**
-	 * Get output character count for this request
-	 * @return Output character count, or 0 if not available
+	 * @deprecated Use getOutputTokenCount() instead. This method is kept for backward
+	 * compatibility.
 	 */
+	@Deprecated
 	public int getOutputCharCount() {
-		return outputCharCount != null ? outputCharCount : 0;
+		return outputTokenCount != null ? outputTokenCount : 0;
 	}
 
 }

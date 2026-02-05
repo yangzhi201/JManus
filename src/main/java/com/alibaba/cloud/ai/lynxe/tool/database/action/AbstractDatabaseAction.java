@@ -17,8 +17,8 @@
 package com.alibaba.cloud.ai.lynxe.tool.database.action;
 
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
-import com.alibaba.cloud.ai.lynxe.tool.database.DataSourceService;
-import com.alibaba.cloud.ai.lynxe.tool.database.DatabaseRequest;
+import com.alibaba.cloud.ai.lynxe.tool.database.databaseOperators.DatabaseRequest;
+import com.alibaba.cloud.ai.lynxe.tool.database.service.DataSourceService;
 
 public abstract class AbstractDatabaseAction {
 

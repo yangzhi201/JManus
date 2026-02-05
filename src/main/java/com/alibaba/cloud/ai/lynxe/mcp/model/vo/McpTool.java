@@ -20,9 +20,9 @@ import java.util.Map;
 import org.springframework.ai.tool.ToolCallback;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
-import com.alibaba.cloud.ai.lynxe.tool.innerStorage.ISmartContentSavingService;
-import com.alibaba.cloud.ai.lynxe.tool.innerStorage.SmartContentSavingService;
+import com.alibaba.cloud.ai.lynxe.tool.filesystem.SmartContentSavingService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -34,10 +34,10 @@ public class McpTool extends AbstractBaseTool<Map<String, Object>> {
 
 	private String serviceNameString;
 
-	private ISmartContentSavingService smartContentSavingService;
+	private SmartContentSavingService smartContentSavingService;
 
 	public McpTool(ToolCallback toolCallback, String serviceNameString, String planId,
-			ISmartContentSavingService smartContentSavingService, ObjectMapper objectMapper) {
+			SmartContentSavingService smartContentSavingService, ObjectMapper objectMapper) {
 		this.toolCallback = toolCallback;
 		this.objectMapper = objectMapper;
 		this.serviceNameString = serviceNameString;
@@ -67,8 +67,8 @@ public class McpTool extends AbstractBaseTool<Map<String, Object>> {
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return "";
+	public ToolStateInfo getCurrentToolStateString() {
+		return new ToolStateInfo(null, "");
 	}
 
 	@Override
@@ -87,9 +87,12 @@ public class McpTool extends AbstractBaseTool<Map<String, Object>> {
 			result = "";
 		}
 
+		// Use rootPlanId if available, otherwise fall back to currentPlanId
+		// This ensures files are saved to root plan directory, not subplan directory
+		String planIdForStorage = (rootPlanId != null && !rootPlanId.trim().isEmpty()) ? rootPlanId : currentPlanId;
 		SmartContentSavingService.SmartProcessResult smartProcessResult = smartContentSavingService
-			.processContent(currentPlanId, result, getName());
-		result = smartProcessResult.getSummary();
+			.processContent(planIdForStorage, result, getName());
+		result = smartProcessResult.getComprehensiveResult();
 
 		return new ToolExecuteResult(result);
 	}

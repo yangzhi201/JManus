@@ -11,7 +11,7 @@ parameters: |
           },
           "description": {
               "type": "string",
-              "description": "表单的描述以及正在收集的信息"
+              "description": "表单的描述以及正在收集的信息。必须使用 Markdown 格式。"
           },
           "inputs": {
               "type": "array",

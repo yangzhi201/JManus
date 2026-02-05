@@ -97,17 +97,18 @@ public class DebugTool extends AbstractBaseTool<Map<String, Object>> {
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return String.format("""
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString = String.format("""
 				Debug Tool Status:
 				- Tool Name: %s
 				- Plan ID: %s
 				- Status: Active
 				""", name, currentPlanId != null ? currentPlanId : "N/A");
+		return new ToolStateInfo(null, stateString);
 	}
 
 	@Override

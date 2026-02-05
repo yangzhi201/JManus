@@ -31,7 +31,13 @@
       <!--left namespace list-->
       <div class="namespace-list">
         <div class="list-header">
-          <h3>{{ t('config.namespaceConfig.configured') }}</h3>
+          <div>
+            <h3>{{ t('config.namespaceConfig.configured') }}</h3>
+          </div>
+          <button class="add-btn" @click="showAddNamespaceModal">
+            <Icon icon="carbon:add" />
+            {{ t('config.namespaceConfig.createNew') }}
+          </button>
         </div>
 
         <div class="namespaces-container" v-if="!loading">
@@ -56,11 +62,6 @@
           <Icon icon="carbon:loading" class="loading-icon" />
           {{ t('common.loading') }}
         </div>
-
-        <button class="add-btn" @click="showAddNamespaceModal">
-          <Icon icon="carbon:add" />
-          {{ t('config.namespaceConfig.createNew') }}
-        </button>
       </div>
 
       <!-- detail -->
@@ -454,8 +455,15 @@ onMounted(() => {
 .list-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.list-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .list-header h3 {
@@ -584,16 +592,16 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 16px;
+  gap: 6px;
+  padding: 6px 12px;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
   color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   transition: all 0.3s ease;
-  font-size: 14px;
+  font-size: 13px;
+  min-height: 32px;
 
   &:hover {
     background: rgba(255, 255, 255, 0.05);

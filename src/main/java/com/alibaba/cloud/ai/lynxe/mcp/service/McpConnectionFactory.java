@@ -161,11 +161,6 @@ public class McpConnectionFactory {
 						long initDuration = System.currentTimeMillis() - initStartTime;
 						logger.info("MCP client initialized successfully for {} in {}ms", mcpServerName, initDuration);
 					})
-					.doOnError(error -> {
-						long initDuration = System.currentTimeMillis() - initStartTime;
-						logger.error("Failed to initialize MCP client for {} after {}ms: {}", mcpServerName,
-								initDuration, error.getMessage(), error);
-					})
 					.block();
 
 				logger.info("MCP transport configured successfully for: {} (attempt {})", mcpServerName, attempt);
@@ -176,12 +171,8 @@ public class McpConnectionFactory {
 			catch (Exception e) {
 				lastException = e;
 
-				// Enhanced error diagnosis and logging
+				// Enhanced error diagnosis
 				String errorDiagnosis = diagnoseInitializationError(e, mcpServerName);
-				logger.error(
-						"Failed to initialize MCP transport for {} on attempt {}/{}. Error type: {}, Diagnosis: {}, Message: {}",
-						mcpServerName, attempt, maxRetries, e.getClass().getSimpleName(), errorDiagnosis,
-						e.getMessage(), e);
 
 				// Check if this is a DNS-related error that shouldn't be retried
 				if (isDnsRelatedError(e)) {
@@ -193,17 +184,38 @@ public class McpConnectionFactory {
 							"DNS resolution failed for MCP server '" + mcpServerName + "': " + e.getMessage(), e);
 				}
 
+				// For intermediate attempts, use WARN level with less detail
+				// Only log full stack trace on final attempt or first attempt
+				if (attempt == 1) {
+					// First attempt - log full details
+					logger.warn(
+							"Failed to initialize MCP transport for {} on attempt {}/{}. Error: {} (Diagnosis: {}). Will retry...",
+							mcpServerName, attempt, maxRetries, e.getMessage(), errorDiagnosis);
+					logger.debug("Full error details for {} attempt {}: ", mcpServerName, attempt, e);
+				}
+				else if (attempt < maxRetries) {
+					// Intermediate attempts - minimal logging
+					logger.debug("Retry attempt {}/{} failed for {}: {}", attempt, maxRetries, mcpServerName,
+							e.getMessage());
+				}
+				else {
+					// Final attempt - log error but without full stack trace here (will
+					// log in final block)
+					logger.warn("Final attempt ({}/{}) failed for {}: {}", attempt, maxRetries, mcpServerName,
+							e.getMessage());
+				}
+
 				// Check if this is a timeout error
-				if (isTimeoutError(e)) {
+				if (isTimeoutError(e) && attempt == 1) {
 					logger.warn(
 							"Initialization timeout for MCP server '{}' after {}s. This may indicate the server is slow to start or unresponsive.",
 							mcpServerName, mcpProperties.getInitializationTimeout().getSeconds());
 				}
 
 				// Check if this is a process-related error (for STDIO transport)
-				if (isProcessRelatedError(e)) {
-					logger.error(
-							"Process-related error for MCP server '{}'. This may indicate the command failed to start or the process exited immediately. Check server stderr logs above.",
+				if (isProcessRelatedError(e) && attempt == 1) {
+					logger.warn(
+							"Process-related error for MCP server '{}'. This may indicate the command failed to start or the process exited immediately.",
 							mcpServerName);
 				}
 
@@ -225,12 +237,21 @@ public class McpConnectionFactory {
 			}
 		}
 
-		// Final error logging with comprehensive diagnosis
-		String finalDiagnosis = diagnoseInitializationError(lastException, mcpServerName);
-		logger.error(
-				"Failed to initialize MCP transport for {} after {} attempts. Final error type: {}, Diagnosis: {}, Message: {}",
-				mcpServerName, maxRetries, lastException != null ? lastException.getClass().getSimpleName() : "null",
-				finalDiagnosis, lastException != null ? lastException.getMessage() : "null", lastException);
+		// Final error logging with comprehensive diagnosis (only if all attempts failed)
+		if (lastException != null) {
+			String finalDiagnosis = diagnoseInitializationError(lastException, mcpServerName);
+			// Log final error - this is the only place we log full stack trace for
+			// repeated failures
+			logger.error(
+					"Failed to initialize MCP transport for {} after {} attempts. Error type: {}, Diagnosis: {}, Message: {}",
+					mcpServerName, maxRetries, lastException.getClass().getSimpleName(), finalDiagnosis,
+					lastException.getMessage(), lastException);
+			// Extract root cause message for better error reporting
+			String rootCauseMessage = extractRootCauseMessage(lastException);
+			// Throw IOException with root cause message, preserving the original
+			// exception as cause
+			throw new IOException(rootCauseMessage, lastException);
+		}
 		return null;
 	}
 
@@ -304,6 +325,35 @@ public class McpConnectionFactory {
 			cause = cause.getCause();
 		}
 		return cause;
+	}
+
+	/**
+	 * Extract root cause message from exception for user-friendly error reporting
+	 * @param e Exception
+	 * @return Root cause message, or exception message if root cause is not available
+	 */
+	private String extractRootCauseMessage(Exception e) {
+		if (e == null) {
+			return "Unknown error";
+		}
+
+		Throwable rootCause = getRootCause(e);
+		String rootCauseMessage = rootCause.getMessage();
+
+		// Prefer root cause message if available and meaningful
+		if (rootCauseMessage != null && !rootCauseMessage.trim().isEmpty()) {
+			// For MCP protocol errors, use the root cause message directly
+			if (rootCause.getClass().getName().contains("McpError")) {
+				return rootCauseMessage;
+			}
+			// For other errors, use root cause message if it's different from the wrapper
+			if (!rootCauseMessage.equals(e.getMessage())) {
+				return rootCauseMessage;
+			}
+		}
+
+		// Fall back to exception message
+		return e.getMessage() != null ? e.getMessage() : "Unknown error";
 	}
 
 	/**

@@ -15,16 +15,16 @@
  */
 package com.alibaba.cloud.ai.lynxe.recorder.entity.vo;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
 import com.alibaba.cloud.ai.lynxe.agent.BaseAgent;
 import com.fasterxml.jackson.databind.JsonSerializable;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
 import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
-
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Unified agent execution record class for tracking and recording detailed information
@@ -105,6 +105,15 @@ public class AgentExecutionRecord {
 
 	// Sub-plan execution records list
 	private List<PlanExecutionRecord> subPlanExecutionRecords;
+
+	// Latest tool method name that was called (computed on-demand)
+	private String latestMethodName;
+
+	// Latest tool method arguments as JSON string (computed on-demand)
+	private String latestMethodArgs;
+
+	// Latest think-act cycle round number (computed on-demand)
+	private Integer latestRoundNumber;
 
 	// Default constructor
 	public AgentExecutionRecord() {
@@ -267,6 +276,30 @@ public class AgentExecutionRecord {
 		this.subPlanExecutionRecords = subPlanExecutionRecords;
 	}
 
+	public String getLatestMethodName() {
+		return latestMethodName;
+	}
+
+	public void setLatestMethodName(String latestMethodName) {
+		this.latestMethodName = latestMethodName;
+	}
+
+	public String getLatestMethodArgs() {
+		return latestMethodArgs;
+	}
+
+	public void setLatestMethodArgs(String latestMethodArgs) {
+		this.latestMethodArgs = latestMethodArgs;
+	}
+
+	public Integer getLatestRoundNumber() {
+		return latestRoundNumber;
+	}
+
+	public void setLatestRoundNumber(Integer latestRoundNumber) {
+		this.latestRoundNumber = latestRoundNumber;
+	}
+
 	// Utility methods
 
 	/**
@@ -311,7 +344,8 @@ public class AgentExecutionRecord {
 		return "AgentExecutionRecord{" + "id=" + id + ", stepId='" + stepId + '\'' + ", conversationId='"
 				+ conversationId + '\'' + ", agentName='" + agentName + '\'' + ", status=" + status + ", currentStep="
 				+ currentStep + ", maxSteps=" + maxSteps + ", thinkActStepsCount="
-				+ (thinkActSteps != null ? thinkActSteps.size() : 0) + ", subPlanCount=" + getSubPlanCount() + '}';
+				+ (thinkActSteps != null ? thinkActSteps.size() : 0) + ", subPlanCount=" + getSubPlanCount()
+				+ ", latestRoundNumber=" + latestRoundNumber + ", latestMethodName='" + latestMethodName + '\'' + '}';
 	}
 
 }

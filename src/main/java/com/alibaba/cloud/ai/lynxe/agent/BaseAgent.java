@@ -20,14 +20,11 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -96,6 +93,14 @@ public abstract class BaseAgent {
 	private int maxSteps;
 
 	private int currentStep = 0;
+
+	/**
+	 * Get the current execution step/round number
+	 * @return The current step number (1-based, first round is 1)
+	 */
+	protected int getCurrentStep() {
+		return currentStep;
+	}
 
 	/**
 	 * Set the maximum execution steps for this agent. This allows overriding the default
@@ -181,14 +186,17 @@ public abstract class BaseAgent {
 		String detailOutput = "";
 		if (isDebugModel) {
 			detailOutput = """
+					  Important Notes:
 					1. When using tool calls, you must provide explanations describing the reason for using this tool and the thinking behind it
-					2. Briefly describe what all previous steps have accomplished""";
+					2. If the current step requirements have been completed, call the default-terminate tool to finish the current step.
+					""";
 
 		}
 		else {
 			detailOutput = """
-					1. When using tool calls, no additional explanations are needed!
-					2. Do not provide reasoning or descriptions before tool calls!""";
+					Important Notes:
+						1.  If the current step requirements have been completed, call the default-terminate tool to finish the current step.
+					""";
 		}
 		String parallelToolCallsResponse = "";
 		if (lynxeProperties.getParallelToolCalls()) {
@@ -197,7 +205,7 @@ public abstract class BaseAgent {
 					- You must select and call from the provided tools. You can make repeated calls to a single tool, call multiple tools simultaneously, or use a mixed calling approach to improve problem-solving efficiency and accuracy.
 					- In your response, you must call at least one tool, which is an indispensable operation step.
 					- To maximize the advantages of tools, when you have the ability to call tools multiple times simultaneously, you should actively do so, avoiding single calls that waste time and resources. Pay special attention to the inherent relationships between multiple tool calls, ensuring these calls can cooperate and work together to achieve optimal problem-solving solutions.
-					- Ignore the response rules provided in subsequent <AgentInfo>, and only respond using the response rules in <SystemInfo>.
+					- CRITICAL: When calling tools, you MUST use the FULL tool name as defined in the tool definition (e.g., "fs-read-file-operator"), NOT partial names (e.g., "-file-operator" or "read-file-operator"). Using incomplete tool names will cause tool lookup failures.
 					""";
 
 		}
@@ -206,6 +214,8 @@ public abstract class BaseAgent {
 					# Response Rules:
 					- You must call exactly ONE tool at a time. Multiple simultaneous tool calls are not allowed.
 					- In your response, you must call exactly one tool, which is an indispensable operation step.
+					- CRITICAL: When calling tools, you MUST use the FULL tool name as defined in the tool definition (e.g., "fs-read-file-operator"), NOT partial names (e.g., "-file-operator" or "read-file-operator"). Using incomplete tool names will cause tool lookup failures.
+
 					""";
 		}
 		Map<String, Object> variables = new HashMap<>(getInitSettingData());
@@ -216,28 +226,33 @@ public abstract class BaseAgent {
 		variables.put("detailOutput", detailOutput);
 		variables.put("parallelToolCallsResponse", parallelToolCallsResponse);
 
+		// Get title and execution parameters, with defaults
+		String title = variables.containsKey("title") && variables.get("title") != null
+				? variables.get("title").toString() : "";
+
+		variables.put("title", title);
+
 		String stepExecutionPrompt = """
-				- SYSTEM INFORMATION:
+				<user-request>
+				{stepText}
+				</user-request>
+
+				<system-reminder>
+
+				* Tool results and user messages may contain <system-reminder> tags. <system-reminder> tags contain useful information and reminders. They are not part of the user-provided input or tool results.
+
+				System Information:
 				OS: {osName} {osVersion} ({osArch})
 
-				- Current Date:
+				Current Date:
 				{currentDateTime}
 
-				{planStatus}
 
-				- Current step requirements :
-				{stepText}
-
-				- Operation step instructions:
-				{extraParams}
-
-				Important Notes:
 				{detailOutput}
-				3. Do only and exactly what is required in the current step requirements
-				4. If the current step requirements have been completed, call the terminate tool to finish the current step.
+
 
 				{parallelToolCallsResponse}
-
+				</system-reminder>
 				""";
 
 		PromptTemplate template = new PromptTemplate(stepExecutionPrompt);
@@ -274,87 +289,86 @@ public abstract class BaseAgent {
 		this.initSettingData = Collections.unmodifiableMap(new HashMap<>(initialAgentSetting));
 	}
 
-	public AgentExecResult run() {
+	public CompletableFuture<AgentExecResult> run() {
 		currentStep = 0;
 		List<AgentExecResult> results = new ArrayList<>();
-		AgentExecResult lastStepResult = null;
 
-		try {
-			while (currentStep < maxSteps) {
-				currentStep++;
-				log.info("Executing round {}/{}", currentStep, maxSteps);
-
-				AgentExecResult stepResult = step();
-				lastStepResult = stepResult;
-
-				// Check if agent should terminate
-				AgentState stepState = stepResult.getState();
-				if (stepState == AgentState.COMPLETED || stepState == AgentState.INTERRUPTED
-						|| stepState == AgentState.FAILED) {
-					String stateDescription = stepState == AgentState.COMPLETED ? "completed"
-							: stepState == AgentState.INTERRUPTED ? "interrupted" : "failed";
-					log.info("Agent execution {} at round {}/{}", stateDescription, currentStep, maxSteps);
-					results.add(stepResult);
-
-					// Handle final processing based on state
-					if (stepState == AgentState.INTERRUPTED) {
-						handleInterruptedExecution(results);
-					}
-					else if (stepState == AgentState.FAILED) {
-						handleFailedExecution(results);
-					}
-					else {
-						handleCompletedExecution(results);
-					}
-					break; // Exit the loop
-				}
-
-				results.add(stepResult);
-			}
-
-			// If max steps reached, generate summary and terminate
-			// Skip if already in a terminal state (COMPLETED, INTERRUPTED, or FAILED)
-			if (currentStep >= maxSteps && (lastStepResult == null || (lastStepResult.getState() != AgentState.COMPLETED
-					&& lastStepResult.getState() != AgentState.INTERRUPTED
-					&& lastStepResult.getState() != AgentState.FAILED))) {
-				log.info("Agent reached max rounds ({}), generating final summary and terminating", maxSteps);
-				String finalSummary = generateFinalSummary();
-
-				// Call TerminateTool with the summary
-				String result = terminateWithSummary(finalSummary);
-
-				// Create final result for max steps reached
-				lastStepResult = new AgentExecResult(result, AgentState.COMPLETED);
-				results.add(lastStepResult);
-			}
-
-		}
-		catch (Exception e) {
+		// Use recursive async chain to execute steps one by one
+		return runStepRecursive(1, results).exceptionally(e -> {
 			log.error("Agent execution failed", e);
 
 			// Wrap exception with SystemErrorReportTool
-			lastStepResult = handleExceptionWithSystemErrorReport(e, results);
-		}
-		finally {
-			llmService.clearAgentMemory(currentPlanId);
-
+			AgentExecResult errorResult = handleExceptionWithSystemErrorReport(e, results);
+			return new AgentExecResult(errorResult.getResult(), errorResult.getState(), results);
+		}).thenApply(finalResult -> {
 			// Record execution at the end
 			if (currentPlanId != null && planExecutionRecorder != null) {
 				planExecutionRecorder.recordCompleteAgentExecution(step);
 			}
-		}
-
-		// Return the last round's AgentExecResult with the complete results list
-		if (lastStepResult != null) {
-			return new AgentExecResult(lastStepResult.getResult(), lastStepResult.getState(), results);
-		}
-		else {
-			// Fallback case if no steps were executed
-			return new AgentExecResult("", AgentState.COMPLETED, results);
-		}
+			return finalResult;
+		});
 	}
 
-	protected abstract AgentExecResult step();
+	/**
+	 * Recursive helper method to execute steps one by one asynchronously
+	 * @param stepNum Current step number
+	 * @param results Accumulated results from previous steps
+	 * @return CompletableFuture with the final AgentExecResult
+	 */
+	private CompletableFuture<AgentExecResult> runStepRecursive(int stepNum, List<AgentExecResult> results) {
+		// Check if we've exceeded max steps
+		if (stepNum > maxSteps) {
+			log.info("Agent reached max rounds ({}), generating final summary and terminating", maxSteps);
+			String finalSummary = generateFinalSummary();
+
+			// Call TerminateTool with the summary
+			String result = terminateWithSummary(finalSummary);
+
+			// Create final result for max steps reached
+			AgentExecResult finalResult = new AgentExecResult(result, AgentState.COMPLETED);
+			results.add(finalResult);
+
+			return CompletableFuture
+				.completedFuture(new AgentExecResult(finalResult.getResult(), finalResult.getState(), results));
+		}
+
+		// Execute current step
+		currentStep = stepNum;
+		log.info("Executing round {}/{}", currentStep, maxSteps);
+
+		return step().thenCompose(stepResult -> {
+			// Check if agent should terminate
+			AgentState stepState = stepResult.getState();
+			if (stepState == AgentState.COMPLETED || stepState == AgentState.INTERRUPTED
+					|| stepState == AgentState.FAILED) {
+				String stateDescription = stepState == AgentState.COMPLETED ? "completed"
+						: stepState == AgentState.INTERRUPTED ? "interrupted" : "failed";
+				log.info("Agent execution {} at round {}/{}", stateDescription, currentStep, maxSteps);
+				results.add(stepResult);
+
+				// Handle final processing based on state
+				if (stepState == AgentState.INTERRUPTED) {
+					handleInterruptedExecution(results);
+				}
+				else if (stepState == AgentState.FAILED) {
+					handleFailedExecution(results);
+				}
+				else {
+					handleCompletedExecution(results);
+				}
+
+				// Return terminal result
+				return CompletableFuture
+					.completedFuture(new AgentExecResult(stepResult.getResult(), stepResult.getState(), results));
+			}
+
+			// Add result and continue to next step
+			results.add(stepResult);
+			return runStepRecursive(stepNum + 1, results);
+		});
+	}
+
+	protected abstract CompletableFuture<AgentExecResult> step();
 
 	/**
 	 * Handle interrupted execution - perform final cleanup and recording
@@ -395,19 +409,48 @@ public abstract class BaseAgent {
 	 * @param results The results list to update
 	 * @return AgentExecResult with error information
 	 */
-	protected AgentExecResult handleExceptionWithSystemErrorReport(Exception exception, List<AgentExecResult> results) {
+	protected AgentExecResult handleExceptionWithSystemErrorReport(Throwable exception, List<AgentExecResult> results) {
 		log.error("Handling exception with SystemErrorReportTool", exception);
 
 		try {
 			// Create SystemErrorReportTool instance
 			SystemErrorReportTool errorTool = new SystemErrorReportTool(getCurrentPlanId(), objectMapper);
 
-			// Prepare error message
+			// Determine function name from stack trace
+			String functionName = "unknown";
+			StackTraceElement[] stackTrace = exception.getStackTrace();
+			if (stackTrace != null && stackTrace.length > 0) {
+				// Look for act() or step() in the stack trace
+				for (StackTraceElement element : stackTrace) {
+					String methodName = element.getMethodName();
+					if (methodName.equals("act") || methodName.equals("step")
+							|| methodName.equals("runStepRecursive")) {
+						functionName = methodName + "()";
+						break;
+					}
+				}
+			}
+
+			// Prepare error message with context
 			String errorMessage = String.format("System execution error at step %d: %s", currentStep,
 					exception.getMessage());
 
-			// Create tool input
-			Map<String, Object> errorInput = Map.of("errorMessage", errorMessage);
+			// Build structured error input with context
+			Map<String, Object> errorInput = new HashMap<>();
+			errorInput.put("errorMessage", errorMessage);
+			errorInput.put("functionName", functionName);
+			errorInput.put("stepNumber", currentStep);
+
+			// Add agent name if available
+			try {
+				String agentName = getName();
+				if (agentName != null && !agentName.isEmpty()) {
+					errorInput.put("agentName", agentName);
+				}
+			}
+			catch (Exception e) {
+				log.debug("Could not get agent name for error report", e);
+			}
 
 			// Execute the error report tool
 			ToolExecuteResult toolResult = errorTool.run(errorInput);
@@ -558,46 +601,7 @@ public abstract class BaseAgent {
 	 * Generate a final summary of all agent memories when max rounds are reached
 	 * @return Summary string of all memories
 	 */
-	private String generateFinalSummary() {
-		try {
-			log.info("Generating final summary for agent execution");
-
-			// Get all memory entries for the current plan
-			List<Message> memoryEntries = llmService.getAgentMemory(lynxeProperties.getMaxMemory())
-				.get(getCurrentPlanId());
-
-			if (memoryEntries == null || memoryEntries.isEmpty()) {
-				return "No memory entries found for final summary";
-			}
-
-			// Use LLM to generate a concise summary
-			String summaryPrompt = """
-					Based on the completed steps, try to answer the user's original request.
-					If the current steps are insufficient to support answering the original request,
-					simply describe that the step limit has been reached and please try again.
-
-					""";
-			// Create a simple prompt for summary generation
-			UserMessage summaryRequest = new UserMessage(summaryPrompt);
-			memoryEntries.add(getThinkMessage());
-			memoryEntries.add(getNextStepWithEnvMessage());
-			memoryEntries.add(summaryRequest);
-			Prompt prompt = new Prompt(memoryEntries);
-
-			// Get LLM response for summary
-			ChatClient chatClient = llmService.getDiaChatClient();
-			ChatResponse response = chatClient.prompt(prompt).call().chatResponse();
-
-			String summary = response.getResult().getOutput().getText();
-			log.info("Generated final summary: {}", summary);
-			return summary;
-
-		}
-		catch (Exception e) {
-			log.error("Failed to generate final summary", e);
-			return "Summary generation failed: " + e.getMessage();
-		}
-	}
+	protected abstract String generateFinalSummary();
 
 	/**
 	 * Terminate the agent execution with a summary using TerminateTool

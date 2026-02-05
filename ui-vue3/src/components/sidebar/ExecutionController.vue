@@ -37,7 +37,6 @@
             <div class="parameter-label-row">
               <label class="parameter-label">
                 {{ param }}
-                <span class="required">*</span>
               </label>
               <!-- Unified parameter history navigation - only show on first parameter -->
               <div v-if="index === 0 && hasParameterHistory()" class="parameter-history-navigation">
@@ -63,6 +62,7 @@
               </div>
             </div>
             <input
+              v-if="!shouldUseTextarea(param)"
               v-model="parameterValues[param]"
               class="parameter-input"
               :class="{
@@ -71,7 +71,24 @@
               }"
               :placeholder="t('sidebar.enterValueFor', { param })"
               @input="updateParameterValue(param, ($event.target as HTMLInputElement).value)"
-              required
+              @keydown="handleInputKeydown($event, param)"
+            />
+            <textarea
+              v-else
+              :ref="
+                el => {
+                  if (el) textareaRefs[param] = el as HTMLTextAreaElement
+                }
+              "
+              v-model="parameterValues[param]"
+              class="parameter-input parameter-textarea"
+              :class="{
+                error: parameterErrors[param],
+                'viewing-history': getToolHistoryIndex() >= 0,
+              }"
+              :placeholder="t('sidebar.enterValueFor', { param })"
+              @input="updateParameterValue(param, ($event.target as HTMLTextAreaElement).value)"
+              rows="3"
             />
             <div v-if="parameterErrors[param]" class="parameter-error">
               {{ parameterErrors[param] }}
@@ -79,19 +96,7 @@
           </div>
         </div>
 
-        <!-- Validation status message - only show after user attempts to execute -->
-        <div
-          v-if="
-            hasAttemptedExecute &&
-            parameterRequirements.hasParameters &&
-            !canExecute &&
-            !props.isExecuting
-          "
-          class="validation-message"
-        >
-          <Icon icon="carbon:warning" width="14" />
-          {{ t('sidebar.fillAllRequiredParameters') }}
-        </div>
+        <!-- Validation status message removed - parameters are now optional -->
       </div>
 
       <!-- File Upload Component -->
@@ -237,18 +242,18 @@ import {
 import FileUploadComponent from '@/components/file-upload/FileUploadComponent.vue'
 import PublishServiceModal from '@/components/publish-service-modal/PublishServiceModal.vue'
 import SaveConfirmationDialog from '@/components/sidebar/SaveConfirmationDialog.vue'
+import { useAvailableToolsSingleton } from '@/composables/useAvailableTools'
 import { useFileUploadSingleton } from '@/composables/useFileUpload'
 import { useMessageDialogSingleton } from '@/composables/useMessageDialog'
-import { usePlanExecutionSingleton } from '@/composables/usePlanExecution'
 import { usePlanTemplateConfigSingleton } from '@/composables/usePlanTemplateConfig'
+import { useTaskExecutionStateSingleton } from '@/composables/useTaskExecutionState'
 import { useTaskStop } from '@/composables/useTaskStop'
 import { useToast } from '@/plugins/useToast'
 import { parameterHistoryStore } from '@/stores/parameterHistory'
 import { templateStore } from '@/stores/templateStore'
-import { useTaskStore } from '@/stores/task'
 import type { PlanData, PlanExecutionRequestPayload } from '@/types/plan-execution'
 import { Icon } from '@iconify/vue'
-import { computed, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -257,14 +262,16 @@ const toast = useToast()
 // Template config singleton
 const templateConfig = usePlanTemplateConfigSingleton()
 
+// Get available tools singleton for validation
+const availableToolsStore = useAvailableToolsSingleton()
+
 // Message dialog singleton for executing plans
 const messageDialog = useMessageDialogSingleton()
 
-// Plan execution singleton to track execution state
-const planExecution = usePlanExecutionSingleton()
+// Unified task execution state (Single Source of Truth)
+const taskExecutionState = useTaskExecutionStateSingleton()
 
-// Task store and stop functionality
-const taskStore = useTaskStore()
+// Task stop functionality
 const { stopTask, isStopping } = useTaskStop()
 
 // Shared file upload state
@@ -294,11 +301,11 @@ const isLoadingParameters = ref(false)
 const activeTab = ref('post-async')
 const parameterErrors = ref<Record<string, string>>({})
 const isValidationError = ref(false)
-const isExecutingPlan = ref(false) // Flag to prevent parameter reload during execution
 const lastPlanId = ref<string | null>(null) // Track last returned plan ID
 const lastRefreshTimestamp = ref<number>(0) // Track last refresh time for debouncing
 const REFRESH_DEBOUNCE_MS = 500 // Debounce time for parameter refresh
 const hasAttemptedExecute = ref(false) // Track if user has attempted to execute (for validation message)
+const textareaRefs = ref<Record<string, HTMLTextAreaElement>>({}) // Refs for textarea elements
 
 // Computed property: whether to show publish MCP service button
 const showPublishButton = computed(() => {
@@ -433,51 +440,21 @@ const buttonText = computed(() => {
     : t('sidebar.publishMcpService')
 })
 
-// Computed property for disabled state - same as InputArea.vue
-const isDisabled = computed(() => messageDialog.isLoading.value)
-
-// Check if a plan is currently running
-const isPlanRunning = computed(() => {
-  return (
-    taskStore.hasRunningTask() ||
-    planExecution.trackedPlanIds.value.size > 0 ||
-    isExecutingPlan.value
-  )
-})
+// Check if a plan is currently running - use unified state
+const isPlanRunning = computed(() => taskExecutionState.isTaskRunning.value)
 
 const canExecute = computed(() => {
-  // Disable if messageDialog is loading (same validation as InputArea)
-  if (isDisabled.value) {
+  // Use unified canExecute as base check
+  if (!taskExecutionState.canExecute.value) {
     return false
   }
 
+  // Additional check for props.isExecuting
   if (props.isExecuting) {
     return false
   }
 
-  // Disable if there's a plan execution in progress (prevents duplicate submissions)
-  if (isExecutingPlan.value) {
-    return false
-  }
-
-  // Also check if there are any tracked plans or running plans
-  const hasTrackedPlans = planExecution.trackedPlanIds.value.size > 0
-  const recordsArray = Object.entries(planExecution.planExecutionRecords.value)
-  const hasRunningPlansInRecords = recordsArray.some(
-    ([, record]) => record && !record.completed && record.status !== 'failed'
-  )
-  if (hasTrackedPlans || hasRunningPlansInRecords) {
-    return false
-  }
-
-  if (parameterRequirements.value.hasParameters) {
-    // Check if all required parameters are filled
-    return parameterRequirements.value.parameters.every(param => {
-      const value = parameterValues.value[param]
-      return typeof value === 'string' && value.trim() !== ''
-    })
-  }
-
+  // Parameters are now optional - no validation needed
   return true
 })
 
@@ -521,13 +498,12 @@ const handleExecutePlan = async () => {
   // Mark that user has attempted to execute (for validation message)
   hasAttemptedExecute.value = true
 
-  // Check if there's already an execution in progress
-  if (props.isExecuting || messageDialog.isLoading.value || isExecutingPlan.value) {
+  // Check if there's already an execution in progress using unified state
+  if (!taskExecutionState.canExecute.value || props.isExecuting) {
     console.log(
-      '[ExecutionController] ⏸️ Execution already in progress. isExecuting: {}, messageDialog.isLoading: {}, isExecutingPlan: {}',
-      props.isExecuting,
-      messageDialog.isLoading.value,
-      isExecutingPlan.value
+      '[ExecutionController] ⏸️ Execution already in progress. canExecute: {}, isExecuting: {}',
+      taskExecutionState.canExecute.value,
+      props.isExecuting
     )
     toast.error(t('sidebar.executionInProgress'))
     return
@@ -572,22 +548,46 @@ const handleExecutePlan = async () => {
 
 const proceedWithExecution = async () => {
   // Double-check execution state before proceeding (defense in depth)
-  if (props.isExecuting || messageDialog.isLoading.value || isExecutingPlan.value) {
+  if (!taskExecutionState.canExecute.value || props.isExecuting) {
     console.log(
       '[ExecutionController] ⏸️ Execution already in progress in proceedWithExecution. Skipping.'
     )
     return
   }
 
-  // Set execution flag to prevent parameter reload and concurrent execution
-  isExecutingPlan.value = true
-  console.log('[ExecutionController] 🔒 Set isExecutingPlan to true')
+  // Note: isRunning is now managed by messageDialog.executePlan()
+  // It will be set to true when execution starts and reset when it completes
+  // No need for local execution flag anymore
 
   // Validate parameters before execution
   if (!validateParameters()) {
     console.log('[ExecutionController] ❌ Parameter validation failed:', parameterErrors.value)
-    isExecutingPlan.value = false // Reset flag on validation failure
     // Keep hasAttemptedExecute as true to show validation message
+    return
+  }
+
+  // Validate that all tools exist before execution
+  const toolsValidation = await validateToolsExist()
+  if (!toolsValidation.isValid) {
+    console.log(
+      '[ExecutionController] ❌ Tool validation failed:',
+      toolsValidation.nonExistentTools
+    )
+    const toolList = toolsValidation.nonExistentTools
+      .map(tool => {
+        // Parse "Step X: toolName" format
+        const match = tool.match(/^Step (\d+): (.+)$/)
+        if (match) {
+          return t('sidebar.nonExistentToolStep', {
+            stepNumber: match[1],
+            toolName: match[2],
+          })
+        }
+        return tool
+      })
+      .join('\n')
+    const errorMessage = `${t('sidebar.cannotExecuteNonExistentTools')}\n\n${t('sidebar.nonExistentToolsHeader')}\n${toolList}`
+    toast.error(errorMessage)
     return
   }
 
@@ -602,7 +602,6 @@ const proceedWithExecution = async () => {
     if (!templateConfig.selectedTemplate.value) {
       console.log('[ExecutionController] ❌ No template selected, returning')
       toast.error(t('sidebar.selectPlanFirst'))
-      isExecutingPlan.value = false
       return
     }
 
@@ -636,7 +635,6 @@ const proceedWithExecution = async () => {
     if (!toolName || toolName.trim() === '') {
       console.error('[ExecutionController] ❌ Tool name is required but not found')
       toast.error(t('sidebar.toolNameRequired') || 'Tool name is required for execution')
-      isExecutingPlan.value = false
       return
     }
 
@@ -685,12 +683,48 @@ const proceedWithExecution = async () => {
     console.error('[ExecutionController] ❌ Error executing plan:', error)
     const message = error instanceof Error ? error.message : 'Unknown error'
     toast.error(t('sidebar.executeFailed') + ': ' + message)
-    isExecutingPlan.value = false
+    // Note: isRunning will be reset by messageDialog.executePlan() on error
   } finally {
     console.log('[ExecutionController] 🧹 Cleaning up after execution')
     // Clear parameters after execution
     clearExecutionParams()
     console.log('[ExecutionController] ✅ Cleanup completed')
+  }
+}
+
+// Validate that all selected tools exist in available tools
+const validateToolsExist = async (): Promise<{ isValid: boolean; nonExistentTools: string[] }> => {
+  // Ensure available tools are loaded
+  if (
+    availableToolsStore.availableTools.value.length === 0 &&
+    !availableToolsStore.isLoading.value
+  ) {
+    await availableToolsStore.loadAvailableTools()
+  }
+
+  const nonExistentTools: string[] = []
+  const availableTools = availableToolsStore.availableTools.value
+  const availableToolKeys = new Set(availableTools.map(tool => tool.key))
+
+  // Get steps from templateConfig
+  const config = templateConfig.getConfig()
+  const steps = config.steps || []
+
+  // Check all steps for non-existent tools
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]
+    const selectedToolKeys = step.selectedToolKeys || []
+
+    for (const toolKey of selectedToolKeys) {
+      if (!availableToolKeys.has(toolKey)) {
+        nonExistentTools.push(`Step ${i + 1}: ${toolKey}`)
+      }
+    }
+  }
+
+  return {
+    isValid: nonExistentTools.length === 0,
+    nonExistentTools,
   }
 }
 
@@ -700,6 +734,27 @@ const handleSaveAndExecute = async () => {
     // Save using templateConfig directly
     if (!templateConfig.selectedTemplate.value) {
       toast.error(t('sidebar.selectPlanFirst'))
+      return
+    }
+
+    // Validate that all tools exist
+    const toolsValidation = await validateToolsExist()
+    if (!toolsValidation.isValid) {
+      const toolList = toolsValidation.nonExistentTools
+        .map(tool => {
+          // Parse "Step X: toolName" format
+          const match = tool.match(/^Step (\d+): (.+)$/)
+          if (match) {
+            return t('sidebar.nonExistentToolStep', {
+              stepNumber: match[1],
+              toolName: match[2],
+            })
+          }
+          return tool
+        })
+        .join('\n')
+      const errorMessage = `${t('sidebar.cannotSaveNonExistentTools')}\n\n${t('sidebar.nonExistentToolsHeader')}\n${toolList}`
+      toast.error(errorMessage)
       return
     }
 
@@ -795,7 +850,8 @@ const handleStop = async () => {
   const success = await stopTask()
   if (success) {
     console.log('[ExecutionController] Task stopped successfully')
-    toast.success(t('input.stop') || 'Stopped')
+    // State is automatically updated by useTaskStop.stopTask()
+    // No need to manually update flags - unified state handles it
   } else {
     console.error('[ExecutionController] Failed to stop task')
     toast.error(t('sidebar.executeFailed') || 'Failed to stop task')
@@ -808,8 +864,8 @@ const clearExecutionParams = () => {
   // Clear parameter values as well
   parameterValues.value = {}
 
-  // Note: isExecutingPlan is NOT reset here - it will be reset when the plan execution completes
-  // This prevents concurrent executions while a plan is still running
+  // Note: Local execution flag is managed by useTaskExecutionState
+  // State is automatically updated when plan execution starts/completes
 
   console.log('[ExecutionController] ✅ After clear - parameterValues cleared')
   // Execution params are now managed internally, no need to emit
@@ -1004,27 +1060,38 @@ const updateParameterValue = (paramName: string, value: string) => {
   updateExecutionParamsFromParameters()
 }
 
-// Validate all parameters
+// Check if a parameter should use textarea (contains newline)
+const shouldUseTextarea = (paramName: string): boolean => {
+  const value = parameterValues.value[paramName]
+  return value != null && value.includes('\n')
+}
+
+// Handle keydown event on input to switch to textarea when Enter is pressed
+const handleInputKeydown = async (event: KeyboardEvent, paramName: string) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    // Prevent default behavior (form submission)
+    event.preventDefault()
+    // Add a newline to trigger textarea mode
+    const currentValue = parameterValues.value[paramName] || ''
+    updateParameterValue(paramName, currentValue + '\n')
+    // Wait for Vue to render the textarea, then focus it and set cursor position
+    await nextTick()
+    const textarea = textareaRefs.value[paramName]
+    if (textarea) {
+      textarea.focus()
+      // Set cursor position at the end of the text
+      const length = textarea.value.length
+      textarea.setSelectionRange(length, length)
+    }
+  }
+}
+
+// Validate all parameters - parameters are now optional, so validation always passes
 const validateParameters = (): boolean => {
   parameterErrors.value = {}
   isValidationError.value = false
-
-  if (!parameterRequirements.value.hasParameters) {
-    return true
-  }
-
-  let hasErrors = false
-
-  parameterRequirements.value.parameters.forEach(param => {
-    const value = parameterValues.value[param] ? parameterValues.value[param].trim() : ''
-    if (!value) {
-      parameterErrors.value[param] = `${param} is required`
-      hasErrors = true
-    }
-  })
-
-  isValidationError.value = hasErrors
-  return !hasErrors
+  // Parameters are optional, so validation always passes
+  return true
 }
 
 // Update execution params from parameter values
@@ -1188,7 +1255,7 @@ watch(
   (newId, oldId) => {
     if (newId && newId !== oldId) {
       // Skip parameter reload if we're currently executing a plan
-      if (isExecutingPlan.value) {
+      if (taskExecutionState.isExecutionInProgress.value) {
         console.log('[ExecutionController] ⏸️ Skipping parameter reload - plan is executing')
         return
       }
@@ -1221,7 +1288,7 @@ watch(
     // When modification flag changes from true to false, it means save was completed
     if (oldValue === true && newValue === false && templateConfig.currentPlanTemplateId.value) {
       // Skip if currently executing
-      if (isExecutingPlan.value) {
+      if (taskExecutionState.isExecutionInProgress.value) {
         console.log('[ExecutionController] ⏸️ Skipping parameter reload - plan is executing')
         return
       }
@@ -1247,33 +1314,8 @@ watch(
   }
 )
 
-// Watch for plan execution completion to reset isExecutingPlan
-watchEffect(() => {
-  const records = planExecution.planExecutionRecords.value
-  const recordsArray = Object.entries(records)
-
-  // Check both trackedPlanIds and planExecutionRecords to handle the case where
-  // a plan has just started but hasn't been polled yet (no record in planExecutionRecords)
-  const hasTrackedPlans = planExecution.trackedPlanIds.value.size > 0
-  const hasRunningPlansInRecords = recordsArray.some(
-    ([, record]) => record && !record.completed && record.status !== 'failed'
-  )
-
-  // If there are tracked plans but no records yet, consider it as running
-  // This handles the race condition where a plan just started but hasn't been polled
-  const hasRunningPlans = hasTrackedPlans || hasRunningPlansInRecords
-
-  // Reset isExecutingPlan when all plans are completed
-  if (!hasRunningPlans && isExecutingPlan.value) {
-    console.log('[ExecutionController] All plans completed, resetting isExecutingPlan', {
-      hasTrackedPlans,
-      hasRunningPlansInRecords,
-      trackedPlanIds: Array.from(planExecution.trackedPlanIds.value),
-      recordsCount: recordsArray.length,
-    })
-    isExecutingPlan.value = false
-  }
-})
+// Note: State management is now handled by useTaskExecutionState
+// No need for watchEffect - state is automatically updated when taskStore.currentTask.isRunning changes
 
 // Execution params are now managed internally, no need to emit updates
 
@@ -1405,6 +1447,13 @@ defineExpose({
         background: rgba(102, 126, 234, 0.15);
         border-color: rgba(102, 126, 234, 0.4);
       }
+    }
+
+    .parameter-textarea {
+      resize: vertical;
+      min-height: 72px;
+      line-height: 1.5;
+      overflow-y: auto;
     }
 
     .parameter-history-navigation {

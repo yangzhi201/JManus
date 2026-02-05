@@ -46,7 +46,7 @@ import jakarta.annotation.PreDestroy;
  * level is 10.
  */
 @Component
-public class LevelBasedExecutorPool {
+public class LevelBasedExecutorPool implements ExecutorPoolProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(LevelBasedExecutorPool.class);
 

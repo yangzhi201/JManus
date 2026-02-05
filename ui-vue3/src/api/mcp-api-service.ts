@@ -25,6 +25,8 @@ export interface McpServer {
   connectionType: 'STUDIO' | 'SSE' | 'STREAMING'
   connectionConfig: string
   status: 'ENABLE' | 'DISABLE'
+  connectionStatus?: 'CONNECTED' | 'DISCONNECTED' | 'ERROR'
+  connectionErrorMessage?: string
 }
 
 export interface McpServerRequest {

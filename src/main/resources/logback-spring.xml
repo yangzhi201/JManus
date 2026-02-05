@@ -16,7 +16,7 @@
 
     <!-- ConsoleAppender console log output -->
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <!-- Filter to only output WARN level and above to console -->
+        <!-- Filter to output WARN level and above to console -->
         <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
             <level>WARN</level>
         </filter>

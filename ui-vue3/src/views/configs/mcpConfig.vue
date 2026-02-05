@@ -39,8 +39,14 @@
       <!-- MCP Server List -->
       <div class="server-list">
         <div class="list-header">
-          <h3>{{ t('config.mcpConfig.serverList') }}</h3>
-          <span class="server-count">({{ servers.length }})</span>
+          <div>
+            <h3>{{ t('config.mcpConfig.serverList') }}</h3>
+            <span class="server-count">({{ servers.length }})</span>
+          </div>
+          <button class="add-btn" @click="startAddConfig">
+            <Icon icon="carbon:add" />
+            {{ t('config.mcpConfig.newMcpConfig') }}
+          </button>
         </div>
 
         <div class="search-box">
@@ -62,7 +68,23 @@
             @click="selectServer(server)"
           >
             <div class="server-card-header">
-              <span class="server-name">{{ server.mcpServerName }}</span>
+              <div class="server-name-section">
+                <span class="server-name">{{ server.mcpServerName }}</span>
+                <div
+                  v-if="server.connectionStatus"
+                  class="connection-status-badge"
+                  :class="getConnectionStatusClass(server.connectionStatus)"
+                  :title="getConnectionStatusTooltip(server)"
+                >
+                  <Icon
+                    :icon="getConnectionStatusIcon(server.connectionStatus)"
+                    class="status-icon"
+                  />
+                  <span class="status-text">{{
+                    getConnectionStatusText(server.connectionStatus)
+                  }}</span>
+                </div>
+              </div>
               <div class="server-status-toggle" @click.stop="toggleServerStatus(server)">
                 <div class="status-toggle" :class="{ enabled: server.status === 'ENABLE' }">
                   <div class="toggle-thumb"></div>
@@ -73,6 +95,13 @@
                   }}</span>
                 </div>
               </div>
+            </div>
+            <div
+              v-if="server.connectionStatus === 'ERROR' && server.connectionErrorMessage"
+              class="connection-error-message"
+            >
+              <Icon icon="carbon:warning" class="error-icon" />
+              <span class="error-text">{{ server.connectionErrorMessage }}</span>
             </div>
             <div class="server-connection-type">
               <Icon
@@ -112,14 +141,6 @@
         <div v-if="!loading && filteredMcpServers.length === 0" class="empty-state">
           <Icon icon="carbon:bot" class="empty-icon" />
           <p>{{ searchQuery ? t('config.notFound') : t('config.mcpConfig.noServers') }}</p>
-        </div>
-
-        <!-- Add configuration button -->
-        <div class="add-config-button-container">
-          <button class="add-btn" @click="startAddConfig">
-            <Icon icon="carbon:add" />
-            {{ t('config.mcpConfig.newMcpConfig') }}
-          </button>
         </div>
       </div>
 
@@ -964,6 +985,53 @@ const handleJsonImport = async () => {
 }
 
 // Get connection type icon
+// Connection status helper functions
+const getConnectionStatusIcon = (status?: string) => {
+  switch (status) {
+    case 'CONNECTED':
+      return 'carbon:checkmark-filled'
+    case 'ERROR':
+      return 'carbon:error-filled'
+    case 'DISCONNECTED':
+      return 'carbon:circle-dash'
+    default:
+      return 'carbon:circle-dash'
+  }
+}
+
+const getConnectionStatusClass = (status?: string) => {
+  switch (status) {
+    case 'CONNECTED':
+      return 'status-connected'
+    case 'ERROR':
+      return 'status-error'
+    case 'DISCONNECTED':
+      return 'status-disconnected'
+    default:
+      return 'status-disconnected'
+  }
+}
+
+const getConnectionStatusText = (status?: string) => {
+  switch (status) {
+    case 'CONNECTED':
+      return t('config.mcpConfig.connectionStatus.connected')
+    case 'ERROR':
+      return t('config.mcpConfig.connectionStatus.error')
+    case 'DISCONNECTED':
+      return t('config.mcpConfig.connectionStatus.disconnected')
+    default:
+      return t('config.mcpConfig.connectionStatus.disconnected')
+  }
+}
+
+const getConnectionStatusTooltip = (server: McpServer) => {
+  if (server.connectionStatus === 'ERROR' && server.connectionErrorMessage) {
+    return server.connectionErrorMessage
+  }
+  return getConnectionStatusText(server.connectionStatus)
+}
+
 const getConnectionTypeIcon = (type: string) => {
   switch (type) {
     case 'STUDIO':
@@ -1108,8 +1176,15 @@ const getConnectionTypeIcon = (type: string) => {
 .list-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.list-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .list-header h3 {
@@ -1204,6 +1279,76 @@ const getConnectionTypeIcon = (type: string) => {
 .server-card.active {
   border-color: #667eea;
   background: rgba(102, 126, 234, 0.1);
+}
+
+.server-name-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.connection-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.connection-status-badge .status-icon {
+  font-size: 12px;
+}
+
+.connection-status-badge .status-text {
+  font-size: 11px;
+}
+
+.connection-status-badge.status-connected {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.connection-status-badge.status-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.connection-status-badge.status-disconnected {
+  background: rgba(156, 163, 175, 0.15);
+  color: #9ca3af;
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+.connection-error-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.connection-error-message .error-icon {
+  font-size: 14px;
+  color: #ef4444;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.connection-error-message .error-text {
+  color: #fca5a5;
+  word-break: break-word;
+  flex: 1;
 }
 
 .server-card-header {
@@ -1374,16 +1519,16 @@ const getConnectionTypeIcon = (type: string) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 16px;
+  gap: 6px;
+  padding: 6px 12px;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
   color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   transition: all 0.3s ease;
-  font-size: 14px;
+  font-size: 13px;
+  min-height: 32px;
 
   &:hover {
     background: rgba(255, 255, 255, 0.05);

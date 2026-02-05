@@ -23,19 +23,22 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.AssistantMessage.ToolCall;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.PromptTemplate;
@@ -44,13 +47,18 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.util.CollectionUtils;
 
+import com.alibaba.cloud.ai.lynxe.agent.entity.AgentStreamingResult;
 import com.alibaba.cloud.ai.lynxe.config.LynxeProperties;
 import com.alibaba.cloud.ai.lynxe.event.LynxeEventPublisher;
 import com.alibaba.cloud.ai.lynxe.event.PlanExceptionClearedEvent;
+import com.alibaba.cloud.ai.lynxe.exception.TokenLimitExceededException;
 import com.alibaba.cloud.ai.lynxe.llm.ConversationMemoryLimitService;
 import com.alibaba.cloud.ai.lynxe.llm.LlmService;
 import com.alibaba.cloud.ai.lynxe.llm.StreamingResponseHandler;
+import com.alibaba.cloud.ai.lynxe.llm.TokenCountService;
+import com.alibaba.cloud.ai.lynxe.llm.TokenLimitService;
 import com.alibaba.cloud.ai.lynxe.planning.PlanningFactory.ToolCallBackContext;
 import com.alibaba.cloud.ai.lynxe.recorder.service.PlanExecutionRecorder;
 import com.alibaba.cloud.ai.lynxe.recorder.service.PlanExecutionRecorder.ActToolParam;
@@ -62,16 +70,16 @@ import com.alibaba.cloud.ai.lynxe.runtime.service.PlanIdDispatcher;
 import com.alibaba.cloud.ai.lynxe.runtime.service.ServiceGroupIndexService;
 import com.alibaba.cloud.ai.lynxe.runtime.service.TaskInterruptionCheckerService;
 import com.alibaba.cloud.ai.lynxe.runtime.service.UserInputService;
+import com.alibaba.cloud.ai.lynxe.subplan.model.vo.SubplanToolWrapper;
 import com.alibaba.cloud.ai.lynxe.tool.ErrorReportTool;
 import com.alibaba.cloud.ai.lynxe.tool.FormInputTool;
 import com.alibaba.cloud.ai.lynxe.tool.SystemErrorReportTool;
 import com.alibaba.cloud.ai.lynxe.tool.TerminableTool;
-import com.alibaba.cloud.ai.lynxe.tool.TerminateTool;
+import com.alibaba.cloud.ai.lynxe.tool.ThinkTool;
 import com.alibaba.cloud.ai.lynxe.tool.ToolCallBiFunctionDef;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.mapreduce.ParallelExecutionService;
-import com.alibaba.cloud.ai.lynxe.workspace.conversation.service.MemoryService;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.micrometer.common.util.StringUtils;
@@ -82,6 +90,16 @@ public class DynamicAgent extends ReActAgent {
 	private static final String CURRENT_STEP_ENV_DATA_KEY = "current_step_env_data";
 
 	private static final Logger log = LoggerFactory.getLogger(DynamicAgent.class);
+
+	/**
+	 * Dedicated thread pool for FormInputTool waiting operations. Uses 5 threads to
+	 * handle user input waiting without blocking business thread pools.
+	 */
+	private static final ExecutorService FORM_INPUT_WAIT_EXECUTOR = Executors.newFixedThreadPool(5, r -> {
+		Thread t = new Thread(r, "form-input-wait-thread-" + System.nanoTime());
+		t.setDaemon(true);
+		return t;
+	});
 
 	private final ObjectMapper objectMapper;
 
@@ -98,6 +116,8 @@ public class DynamicAgent extends ReActAgent {
 	private ChatResponse response;
 
 	private StreamingResponseHandler.StreamingResult streamResult;
+
+	private AgentStreamingResult agentStreamingResult;
 
 	private Prompt userPrompt;
 
@@ -116,8 +136,6 @@ public class DynamicAgent extends ReActAgent {
 	private AgentInterruptionHelper agentInterruptionHelper;
 
 	private ParallelExecutionService parallelExecutionService;
-
-	private MemoryService memoryService;
 
 	private ConversationMemoryLimitService conversationMemoryLimitService;
 
@@ -141,10 +159,21 @@ public class DynamicAgent extends ReActAgent {
 	private final List<String> recentToolResults = new ArrayList<>();
 
 	/**
-	 * Flag to track if user request has been saved to conversation memory This prevents
-	 * duplicate saves during retry attempts
+	 * Agent memory stored as a list of messages (replaces ChatMemory-based agentMemory)
 	 */
-	private boolean userRequestSavedToConversationMemory = false;
+	private List<Message> agentMessages = new ArrayList<>();
+
+	/**
+	 * Extra messages stored as a list. Set during agent initialization to avoid repeated
+	 * retrieval from ChatMemory.
+	 */
+	private List<Message> extraMessage = new ArrayList<>();
+
+	/**
+	 * Model context limit (in tokens) used for the current think-act cycle. Set during
+	 * checkAndCompressMemoryIfNeeded() and used when recording ThinkActRecord.
+	 */
+	private Integer currentModelContextLimit = null;
 
 	public void clearUp(String planId) {
 		Map<String, ToolCallBackContext> toolCallBackContext = toolCallbackProvider.getToolCallBackContext();
@@ -171,9 +200,9 @@ public class DynamicAgent extends ReActAgent {
 			Map<String, Object> initialAgentSetting, UserInputService userInputService, String modelName,
 			StreamingResponseHandler streamingResponseHandler, ExecutionStep step, PlanIdDispatcher planIdDispatcher,
 			LynxeEventPublisher lynxeEventPublisher, AgentInterruptionHelper agentInterruptionHelper,
-			ObjectMapper objectMapper, ParallelExecutionService parallelExecutionService, MemoryService memoryService,
+			ObjectMapper objectMapper, ParallelExecutionService parallelExecutionService,
 			ConversationMemoryLimitService conversationMemoryLimitService,
-			ServiceGroupIndexService serviceGroupIndexService) {
+			ServiceGroupIndexService serviceGroupIndexService, List<Message> extraMessage) {
 		super(llmService, planExecutionRecorder, lynxeProperties, initialAgentSetting, step, planIdDispatcher);
 		this.objectMapper = objectMapper;
 		super.objectMapper = objectMapper; // Set parent's objectMapper as well
@@ -193,9 +222,9 @@ public class DynamicAgent extends ReActAgent {
 		this.lynxeEventPublisher = lynxeEventPublisher;
 		this.agentInterruptionHelper = agentInterruptionHelper;
 		this.parallelExecutionService = parallelExecutionService;
-		this.memoryService = memoryService;
 		this.conversationMemoryLimitService = conversationMemoryLimitService;
 		this.serviceGroupIndexService = serviceGroupIndexService;
+		this.extraMessage = extraMessage != null ? new ArrayList<>(extraMessage) : new ArrayList<>();
 	}
 
 	@Override
@@ -233,9 +262,8 @@ public class DynamicAgent extends ReActAgent {
 	private boolean executeWithRetry(int maxRetries) throws Exception {
 		int attempt = 0;
 		Exception lastException = null;
-		// Track early termination count to prevent infinite loops
-		int earlyTerminationCount = 0;
-		final int EARLY_TERMINATION_THRESHOLD = 3; // Fail after 3 early terminations
+		// Track no-tool-selected count to add IMPORTANT hints when repeated
+		int noToolSelectedCount = 0;
 		// Clear exception list at the start of retry cycle
 		llmCallExceptions.clear();
 		latestLlmException = null;
@@ -259,14 +287,14 @@ public class DynamicAgent extends ReActAgent {
 				// Use current env as user message
 				Message currentStepEnvMessage = currentStepEnvMessage();
 
-				// If early termination occurred in previous attempt, add explicit tool
-				// call requirement
-				if (earlyTerminationCount > 0) {
-					String toolCallRequirement = String
-						.format("\n\n⚠️ IMPORTANT: You must call at least one tool to proceed. "
-								+ "Previous attempt returned only text without tool calls (early termination detected %d time(s)). "
-								+ "Do not provide explanations or reasoning - call a tool immediately.",
-								earlyTerminationCount);
+				// If no tools were selected in previous attempts, add explicit tool call
+				// requirement
+				if (noToolSelectedCount > 0) {
+					String toolCallRequirement = String.format(
+							"\n\n IMPORTANT: You must call at least one tool to proceed. "
+									+ "Previous %d attempt(s) did not select any tools. "
+									+ "Do not provide explanations or reasoning - call a tool immediately.",
+							noToolSelectedCount);
 					// Append requirement to current step env message
 					String enhancedEnvText = currentStepEnvMessage.getText() + toolCallRequirement;
 					// Create new UserMessage with enhanced text, preserving metadata
@@ -275,60 +303,57 @@ public class DynamicAgent extends ReActAgent {
 						enhancedMessage.getMetadata().putAll(currentStepEnvMessage.getMetadata());
 					}
 					currentStepEnvMessage = enhancedMessage;
-					log.info("Added explicit tool call requirement to retry message (early termination count: {})",
-							earlyTerminationCount);
+					log.info("Added explicit tool call requirement to retry message (no tool selected count: {})",
+							noToolSelectedCount);
 				}
 				// Record think message
 				List<Message> thinkMessages = Arrays.asList(systemMessage, currentStepEnvMessage);
 				String thinkInput = thinkMessages.toString();
 
+				// Merge extraMessage into agentMessages at the first round
+				if (getCurrentStep() == 1 && extraMessage != null && !extraMessage.isEmpty()) {
+					log.debug("First round: merging {} extra messages into agentMessages for conversationId: {}",
+							extraMessage.size(), getConversationId());
+					agentMessages.addAll(0, extraMessage);
+					// Clear extraMessage after merging to avoid duplicate processing
+					extraMessage.clear();
+				}
+
+				// Check and compress memory after merging extraMessage (if first round)
+				// and before building prompt
+				// This calculates the full prompt token count, compresses if needed, and
+				// checks against model context limit
+				int inputTokenCount = checkAndCompressMemoryIfNeeded(systemMessage, currentStepEnvMessage);
+
+				// Validate inputTokenCount
+				if (inputTokenCount <= 0) {
+					throw new IllegalStateException(
+							"Failed to calculate input token count. TokenCountService or ConversationMemoryLimitService must be available.");
+				}
+
 				// log.debug("Messages prepared for the prompt: {}", thinkMessages);
 				// Build current prompt. System message is the first message
 				List<Message> messages = new ArrayList<>();
-				// Add history message from agent memory
-				ChatMemory chatMemory = llmService.getAgentMemory(lynxeProperties.getMaxMemory());
-				List<Message> historyMem = chatMemory.get(getCurrentPlanId());
-				// List<Message> subAgentMem = chatMemory.get(getCurrentPlanId());
+				// Add history message from agent memory (already contains extraMessage if
+				// first round, and may be compressed)
+				List<Message> historyMem = agentMessages;
 
-				// Add conversation history from MemoryService if conversationId is
-				// available and conversation memory is enabled
-				if (lynxeProperties.getEnableConversationMemory() && memoryService != null
-						&& getConversationId() != null && !getConversationId().trim().isEmpty()) {
-					try {
-						ChatMemory conversationMemory = llmService
-							.getConversationMemoryWithLimit(lynxeProperties.getMaxMemory(), getConversationId());
-						List<Message> conversationHistory = conversationMemory.get(getConversationId());
-						if (conversationHistory != null && !conversationHistory.isEmpty()) {
-							log.debug("Adding {} conversation history messages for conversationId: {}",
-									conversationHistory.size(), getConversationId());
-							// Insert conversation history before current step env message
-							// to maintain chronological order
-							messages.addAll(conversationHistory);
-						}
-					}
-					catch (Exception e) {
-						log.warn(
-								"Failed to retrieve conversation history for conversationId: {}. Continuing without it.",
-								getConversationId(), e);
-					}
-				}
-				else if (!lynxeProperties.getEnableConversationMemory()) {
-					log.debug("Conversation memory is disabled, skipping conversation history retrieval");
-				}
 				messages.addAll(Collections.singletonList(systemMessage));
+				// Add historyMem (agent memory) in every round
 				messages.addAll(historyMem);
-				messages.add(currentStepEnvMessage);
+				log.debug("Added {} history messages from agent memory for round {}", historyMem.size(),
+						getCurrentStep());
 
-				// Save user request (stepText) to conversation memory after building
-				// messages
-				// This prevents duplicate messages in the conversation history
-				saveUserRequestToConversationMemory();
+				messages.add(currentStepEnvMessage);
 
 				String toolcallId = planIdDispatcher.generateToolCallId();
 				// Call the LLM
 				Map<String, Object> toolContextMap = new HashMap<>();
 				toolContextMap.put("toolcallId", toolcallId);
 				toolContextMap.put("planDepth", getPlanDepth());
+				// NOTE: Do NOT add recursive call chain here - it should only be in tool
+				// execution contexts
+				// Adding it here can cause serialization issues with Spring AI
 				ToolCallingChatOptions chatOptions = ToolCallingChatOptions.builder()
 					.internalToolExecutionEnabled(false)
 					.toolContext(toolContextMap)
@@ -344,15 +369,6 @@ public class DynamicAgent extends ReActAgent {
 				else {
 					chatClient = llmService.getDynamicAgentChatClient(modelName);
 				}
-				// Calculate input character count from all messages before calling LLM
-				int inputCharCount = messages.stream().mapToInt(message -> {
-					String text = message.getText();
-					if (text == null || text.trim().isEmpty()) {
-						return 0;
-					}
-					return text.length();
-				}).sum();
-				log.info("User prompt character count: {}", inputCharCount);
 
 				// Use streaming response handler for better user experience and content
 				// merging
@@ -362,51 +378,70 @@ public class DynamicAgent extends ReActAgent {
 					.chatResponse();
 				boolean isDebugModel = lynxeProperties.getDebugDetail() != null && lynxeProperties.getDebugDetail();
 				// Enable early termination for agent thinking (should have tool calls)
+				// Pass token count directly to StreamingResponseHandler
 				streamResult = streamingResponseHandler.processStreamingResponse(responseFlux,
-						"Agent " + getName() + " thinking", getCurrentPlanId(), isDebugModel, true, inputCharCount);
+						"Agent " + getName() + " thinking", getCurrentPlanId(), isDebugModel, true, inputTokenCount);
 
-				response = streamResult.getLastResponse();
-
-				// Use merged content from streaming handler
+				// Extract commonly used data into AgentStreamingResult
 				List<ToolCall> toolCalls = streamResult.getEffectiveToolCalls();
 				String responseByLLm = streamResult.getEffectiveText();
+				int finalInputTokenCount = streamResult.getInputTokenCount();
+				int finalOutputTokenCount = streamResult.getOutputTokenCount();
 
-				// Get input and output character counts from StreamingResult
-				int finalInputCharCount = streamResult.getInputCharCount();
-				int finalOutputCharCount = streamResult.getOutputCharCount();
-				log.info("Input character count: {}, Output character count: {}", finalInputCharCount,
-						finalOutputCharCount);
+				agentStreamingResult = new AgentStreamingResult(toolCalls, responseByLLm, finalInputTokenCount,
+						finalOutputTokenCount);
 
-				// Check for early termination
-				boolean isEarlyTerminated = streamResult.isEarlyTerminated();
-				if (isEarlyTerminated) {
-					earlyTerminationCount++;
-					log.warn(
-							"Early termination detected (attempt {}): thinking-only response with no tool calls. Count: {}/{}",
-							attempt, earlyTerminationCount, EARLY_TERMINATION_THRESHOLD);
+				// Keep response for backward compatibility (used in
+				// extractAssistantMessageFromResponse)
+				response = streamResult.getLastResponse();
 
-					// If early termination threshold reached, fail gracefully
-					if (earlyTerminationCount >= EARLY_TERMINATION_THRESHOLD) {
-						log.error(
-								"Early termination threshold ({}) reached. LLM repeatedly returned thinking-only responses without tool calls. Failing gracefully.",
-								EARLY_TERMINATION_THRESHOLD);
-						// Store a special exception to indicate early termination failure
-						latestLlmException = new Exception(
-								"Early termination threshold reached: LLM returned thinking-only responses without tool calls "
-										+ earlyTerminationCount + " times. The model must call tools to proceed.");
-						return false; // Return false to trigger failure handling in
-										// step()
+				log.info("Input token count: {}, Output token count: {}", agentStreamingResult.getInputTokenCount(),
+						agentStreamingResult.getOutputTokenCount());
+
+				log.info(String.format("✨ %s's thoughts: %s", getName(), agentStreamingResult.getResponseText()));
+				log.info(String.format("🛠️ %s selected %d tools to use", getName(),
+						agentStreamingResult.getToolCalls().size()));
+
+				// If no tools selected, wrap message in ThinkTool and create a ToolCall
+				if (!agentStreamingResult.hasToolCalls()) {
+					noToolSelectedCount++;
+					log.warn("Attempt {}: No tools selected. Creating ThinkTool call... (no tool selected count: {})",
+							attempt, noToolSelectedCount);
+
+					try {
+						// Prepare ThinkTool input
+						Map<String, Object> thinkToolInput = new HashMap<>();
+						thinkToolInput.put("message", agentStreamingResult.getResponseText() != null
+								? agentStreamingResult.getResponseText() : "No response from LLM");
+
+						// Create ThinkTool ToolCall
+						String thinkToolCallId = planIdDispatcher.generateToolCallId();
+						String thinkToolArguments = objectMapper.writeValueAsString(thinkToolInput);
+						ToolCall thinkToolCall = new ToolCall(thinkToolCallId, "function",
+								ThinkTool.SERVICE_GROUP + "-" + ThinkTool.name, thinkToolArguments);
+
+						// Add ThinkTool call to agentStreamingResult
+						List<ToolCall> toolCallsWithThink = new ArrayList<>();
+						toolCallsWithThink.add(thinkToolCall);
+						agentStreamingResult.setToolCalls(toolCallsWithThink);
+
+						log.info("Created ThinkTool call, will be executed in unified tool processing flow");
+					}
+					catch (Exception e) {
+						log.error("Failed to create ThinkTool call: {}", e.getMessage(), e);
+						// Continue with normal retry flow if ThinkTool creation fails
 					}
 				}
 
-				log.info(String.format("✨ %s's thoughts: %s", getName(), responseByLLm));
-				log.info(String.format("🛠️ %s selected %d tools to use", getName(), toolCalls.size()));
-
-				if (!toolCalls.isEmpty()) {
-					// Reset early termination count on successful tool call
-					earlyTerminationCount = 0;
+				// Unified tool processing flow (handles both regular tools and ThinkTool)
+				if (agentStreamingResult.hasToolCalls()) {
+					// Reset no-tool-selected count on successful tool call
+					noToolSelectedCount = 0;
 					log.info(String.format("🧰 Tools being prepared: %s",
-							toolCalls.stream().map(ToolCall::name).collect(Collectors.toList())));
+							agentStreamingResult.getToolCalls()
+								.stream()
+								.map(ToolCall::name)
+								.collect(Collectors.toList())));
 
 					String stepId = super.step.getStepId();
 					String thinkActId = planIdDispatcher.generateThinkActId();
@@ -416,17 +451,20 @@ public class DynamicAgent extends ReActAgent {
 					// present
 					// This ensures each tool has its own toolCallId for proper sub-plan
 					// linkage
-					for (ToolCall toolCall : toolCalls) {
-						String toolCallIdForTool = (toolCalls.size() > 1) ? planIdDispatcher.generateToolCallId()
-								: toolcallId;
+					for (ToolCall toolCall : agentStreamingResult.getToolCalls()) {
+						String toolCallIdForTool = (agentStreamingResult.getToolCalls().size() > 1)
+								? planIdDispatcher.generateToolCallId() : toolcallId;
 						ActToolParam actToolInfo = new ActToolParam(toolCall.name(), toolCall.arguments(),
 								toolCallIdForTool);
 						actToolInfoList.add(actToolInfo);
 					}
 
 					ThinkActRecordParams paramsN = new ThinkActRecordParams(thinkActId, stepId, thinkInput,
-							responseByLLm, null, finalInputCharCount, finalOutputCharCount, actToolInfoList);
+							agentStreamingResult.getResponseText(), null, agentStreamingResult.getInputTokenCount(),
+							agentStreamingResult.getOutputTokenCount(), currentModelContextLimit, actToolInfoList);
 					planExecutionRecorder.recordThinkingAndAction(step, paramsN);
+					// Reset after recording
+					currentModelContextLimit = null;
 
 					// Clear exception cache if this was a retry attempt
 					if (attempt > 1 && lynxeEventPublisher != null) {
@@ -435,16 +473,6 @@ public class DynamicAgent extends ReActAgent {
 					}
 
 					return true;
-				}
-
-				// No tool calls - check if this is due to early termination
-				if (isEarlyTerminated) {
-					log.warn(
-							"Attempt {}: Early termination - no tools selected (thinking-only response). Retrying with explicit tool call requirement...",
-							attempt);
-				}
-				else {
-					log.warn("Attempt {}: No tools selected. Retrying...", attempt);
 				}
 
 			}
@@ -516,47 +544,35 @@ public class DynamicAgent extends ReActAgent {
 	}
 
 	@Override
-	public AgentExecResult step() {
+	public CompletableFuture<AgentExecResult> step() {
 		try {
 			boolean shouldAct = think();
 			if (!shouldAct) {
 				// Check if we have a latest exception from LLM calls (max retries
 				// reached)
 				if (latestLlmException != null) {
-					// Check if failure was due to early termination threshold
-					if (latestLlmException.getMessage() != null
-							&& latestLlmException.getMessage().contains("Early termination threshold reached")) {
-						log.error(
-								"Agent {} failed due to early termination threshold. LLM repeatedly returned thinking-only responses without tool calls.",
-								getName());
-						// Return FAILED state to stop infinite retry loop
-						return new AgentExecResult(
-								"Agent failed: LLM repeatedly returned thinking-only responses without tool calls. "
-										+ "Please ensure the model is configured to call tools. "
-										+ latestLlmException.getMessage(),
-								AgentState.FAILED);
-					}
-
 					log.error(
 							"Agent {} thinking failed after all retries. Simulating full flow with SystemErrorReportTool",
 							getName());
-					return handleLlmTimeoutWithSystemErrorReport();
+					return CompletableFuture.completedFuture(handleLlmTimeoutWithSystemErrorReport());
 				}
 				// No tools selected after all retries - require LLM to output tool calls
 				log.warn("Agent {} did not select any tools after all retries. Requiring tool call.", getName());
-				return new AgentExecResult(
+				return CompletableFuture.completedFuture(new AgentExecResult(
 						"No tools were selected. You must select and call at least one tool to proceed. Please retry with tool calls.",
-						AgentState.IN_PROGRESS);
+						AgentState.IN_PROGRESS));
 			}
+			// Chain act() async result
 			return act();
 		}
 		catch (TaskInterruptionCheckerService.TaskInterruptedException e) {
 			// Agent was interrupted, return INTERRUPTED state to stop execution
-			return new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.INTERRUPTED);
+			return CompletableFuture.completedFuture(
+					new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.INTERRUPTED));
 		}
 		catch (Exception e) {
 			log.error("Unexpected exception in step()", e);
-			return handleExceptionWithSystemErrorReport(e, new ArrayList<>());
+			return CompletableFuture.completedFuture(handleExceptionWithSystemErrorReport(e, new ArrayList<>()));
 		}
 	}
 
@@ -578,62 +594,172 @@ public class DynamicAgent extends ReActAgent {
 	}
 
 	/**
-	 * Build error message from the latest exception
-	 * @return Formatted error message with exception details
+	 * Build error message from the latest exception with context information
+	 * @param functionName Name of the function that failed (e.g., "think()", "act()")
+	 * @return Formatted error message with exception details and context
 	 */
-	private String buildErrorMessageFromLatestException() {
+	private String buildErrorMessageFromLatestException(String functionName) {
 		if (latestLlmException == null) {
 			return "Unknown error occurred during LLM call";
 		}
 
 		StringBuilder errorMessage = new StringBuilder();
-		errorMessage.append("LLM call failed after all retry attempts. ");
+		errorMessage.append("LLM call failed after all retry attempts.\n");
+
+		// Add function name
+		if (functionName != null && !functionName.isEmpty()) {
+			errorMessage.append("Function: ").append(functionName).append("\n");
+		}
+
+		// Add agent name
+		if (agentName != null && !agentName.isEmpty()) {
+			errorMessage.append("Agent: ").append(agentName).append("\n");
+		}
+
+		// Add step number
+		int stepNumber = getCurrentStep();
+		errorMessage.append("Step: ").append(stepNumber).append("\n");
+
+		// Add model name
+		String effectiveModelName = modelName;
+		if (effectiveModelName == null || effectiveModelName.isEmpty()) {
+			effectiveModelName = llmService != null ? llmService.getDefaultModelName() : "unknown";
+		}
+		errorMessage.append("Model: ").append(effectiveModelName).append("\n");
+
+		// Add input token count if available
+		int inputTokenCount = -1;
+		if (agentStreamingResult != null && agentStreamingResult.getInputTokenCount() > 0) {
+			inputTokenCount = agentStreamingResult.getInputTokenCount();
+		}
+		else if (streamResult != null && streamResult.getInputTokenCount() > 0) {
+			inputTokenCount = streamResult.getInputTokenCount();
+		}
+
+		// Handle TokenLimitExceededException specially
+		if (latestLlmException instanceof TokenLimitExceededException tokenLimitException) {
+			int currentTokens = tokenLimitException.getCurrentTokens();
+			int limit = tokenLimitException.getLimit();
+			String exceptionModelName = tokenLimitException.getModelName();
+			errorMessage.append("Input Tokens: ").append(currentTokens).append(" (Limit: ").append(limit).append(")\n");
+			if (exceptionModelName != null && !exceptionModelName.equals(effectiveModelName)) {
+				errorMessage.append("Model (from exception): ").append(exceptionModelName).append("\n");
+			}
+		}
+		else if (inputTokenCount > 0) {
+			errorMessage.append("Input Tokens: ").append(inputTokenCount).append("\n");
+		}
+
+		// Add prompt summary (first message or truncated)
+		if (userPrompt != null && userPrompt.getInstructions() != null && !userPrompt.getInstructions().isEmpty()) {
+			String promptSummary = buildPromptSummary(userPrompt.getInstructions());
+			if (promptSummary != null && !promptSummary.isEmpty()) {
+				errorMessage.append("Prompt Summary: ").append(promptSummary).append("\n");
+			}
+		}
 
 		// Add exception type and message
 		String exceptionType = latestLlmException.getClass().getSimpleName();
 		String exceptionMessage = latestLlmException.getMessage();
-
 		errorMessage.append("Latest error: [").append(exceptionType).append("] ").append(exceptionMessage);
 
 		// Add exception count information
 		if (!llmCallExceptions.isEmpty()) {
-			errorMessage.append(" (Total attempts: ").append(llmCallExceptions.size()).append(")");
+			errorMessage.append("\n(Total attempts: ").append(llmCallExceptions.size()).append(")");
 		}
 
 		// Add detailed error information for WebClientResponseException
 		if (latestLlmException instanceof org.springframework.web.reactive.function.client.WebClientResponseException webClientException) {
 			String responseBody = webClientException.getResponseBodyAsString();
 			if (responseBody != null && !responseBody.isEmpty()) {
-				errorMessage.append(". API Response: ").append(responseBody);
+				errorMessage.append("\nAPI Response: ").append(responseBody);
 			}
 		}
 
 		return errorMessage.toString();
 	}
 
+	/**
+	 * Build a summary of the prompt messages (shows all messages as JSON without
+	 * truncation) This includes tool calls, arguments, and all message fields for
+	 * complete visibility
+	 * @param messages List of messages in the prompt
+	 * @return Full summary string with all messages as JSON
+	 */
+	private String buildPromptSummary(List<Message> messages) {
+		if (messages == null || messages.isEmpty()) {
+			return null;
+		}
+
+		StringBuilder summary = new StringBuilder();
+
+		for (int i = 0; i < messages.size(); i++) {
+			Message message = messages.get(i);
+
+			if (summary.length() > 0) {
+				summary.append("\n");
+			}
+
+			// Serialize each message to JSON to show complete structure including tool
+			// calls and arguments
+			try {
+				if (objectMapper != null) {
+					String messageJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(message);
+					summary.append("Message ").append(i + 1).append(":\n").append(messageJson);
+				}
+				else {
+					// Fallback if ObjectMapper is not available
+					String messageType = message.getClass().getSimpleName();
+					String messageText = message.getText();
+					summary.append(messageType);
+					if (messageText != null && !messageText.isEmpty()) {
+						summary.append(": ").append(messageText);
+					}
+					else {
+						summary.append(": <empty>");
+					}
+				}
+			}
+			catch (Exception e) {
+				// Fallback if JSON serialization fails
+				String messageType = message.getClass().getSimpleName();
+				String messageText = message.getText();
+				summary.append(messageType);
+				if (messageText != null && !messageText.isEmpty()) {
+					summary.append(": ").append(messageText);
+				}
+				else {
+					summary.append(": <empty>");
+				}
+				summary.append(" (Failed to serialize to JSON: ").append(e.getMessage()).append(")");
+			}
+		}
+
+		return summary.toString();
+	}
+
 	@Override
-	protected AgentExecResult act() {
+	protected CompletableFuture<AgentExecResult> act() {
 		// Check for interruption before starting action process
 		if (agentInterruptionHelper != null && !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
 			log.info("Agent {} action process interrupted for rootPlanId: {}", getName(), getRootPlanId());
-			return new AgentExecResult("Action interrupted by user", AgentState.INTERRUPTED);
+			return CompletableFuture
+				.completedFuture(new AgentExecResult("Action interrupted by user", AgentState.INTERRUPTED));
 		}
 
 		try {
-			List<ToolCall> toolCalls = streamResult.getEffectiveToolCalls();
+			if (agentStreamingResult == null) {
+				return CompletableFuture.completedFuture(
+						new AgentExecResult("Agent streaming result is null, please retry", AgentState.IN_PROGRESS));
+			}
 
-			// Route to appropriate handler based on tool count
-			if (toolCalls == null || toolCalls.isEmpty()) {
-				return new AgentExecResult("tool call is empty , please retry", AgentState.IN_PROGRESS);
+			if (!agentStreamingResult.hasToolCalls()) {
+				return CompletableFuture
+					.completedFuture(new AgentExecResult("tool call is empty, please retry", AgentState.IN_PROGRESS));
 			}
-			else if (toolCalls.size() == 1) {
-				// Single tool execution - core logic
-				return processSingleTool(toolCalls.get(0));
-			}
-			else {
-				// Multiple tools execution
-				return processMultipleTools(toolCalls);
-			}
+
+			// Unified call to processTools() - chain the async result
+			return processTools(agentStreamingResult.getToolCalls());
 		}
 		catch (Exception e) {
 			log.error("Error executing tools: {}", e.getMessage(), e);
@@ -651,248 +777,415 @@ public class DynamicAgent extends ReActAgent {
 			if (rootPlanId != null) {
 				userInputService.removeFormInputTool(rootPlanId);
 			}
-			return new AgentExecResult(e.getMessage(), AgentState.COMPLETED);
+			return CompletableFuture.completedFuture(new AgentExecResult(e.getMessage(), AgentState.COMPLETED));
 		}
 	}
 
 	/**
-	 * Process a single tool execution This is the core logic for tool execution
-	 * @param toolCall The tool call to execute
-	 * @return AgentExecResult containing the execution result
+	 * Unified method to process tools (single or multiple) Uses "build task list first,
+	 * then execute" pattern
+	 * @param toolCalls List of tool calls to execute
+	 * @return CompletableFuture that completes with AgentExecResult containing the
+	 * execution result
 	 */
-	private AgentExecResult processSingleTool(ToolCall toolCall) {
-		ToolExecutionResult toolExecutionResult = null;
+	private CompletableFuture<AgentExecResult> processTools(List<ToolCall> toolCalls) {
+		// Check for interruption
+		if (agentInterruptionHelper != null && !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
+			return CompletableFuture
+				.completedFuture(new AgentExecResult("Action interrupted by user", AgentState.INTERRUPTED));
+		}
+
+		// Validate that actToolInfoList size matches toolCalls size
+		if (actToolInfoList.size() != toolCalls.size()) {
+			String errorMessage = String.format(
+					"Size mismatch: actToolInfoList has %d items but toolCalls has %d items. "
+							+ "This indicates an inconsistency in tool call tracking.",
+					actToolInfoList.size(), toolCalls.size());
+			log.error(errorMessage);
+			return CompletableFuture.completedFuture(new AgentExecResult(errorMessage, AgentState.IN_PROGRESS));
+		}
+
+		// Check if ParallelExecutionService is available
+		if (parallelExecutionService == null) {
+			log.error("ParallelExecutionService is not available");
+			return CompletableFuture.completedFuture(
+					new AgentExecResult("Parallel execution service is not available", AgentState.COMPLETED));
+		}
+
+		// 1. Build execution task list
+		List<ExecutionTask> executionTasks = buildExecutionTasks(toolCalls);
+
+		// 2. Detect if FormInputTool is present
+		boolean hasFormInputTool = executionTasks.stream().anyMatch(ExecutionTask::isFormInputTool);
+
+		// 3. Unified execution - chain async execution with result processing
+		CompletableFuture<List<Map<String, Object>>> executionResultsFuture;
+		if (hasFormInputTool) {
+			// Contains FormInputTool: execute all sequentially
+			executionResultsFuture = executeTasksSequentially(executionTasks);
+		}
+		else {
+			// No FormInputTool: can execute in parallel
+			executionResultsFuture = executeTasksInParallel(executionTasks);
+		}
+
+		// 4. Unified result processing - chain the result processing
+		return executionResultsFuture.thenApply(executionResults -> {
+			try {
+				return processExecutionResults(executionTasks, executionResults);
+			}
+			catch (Exception e) {
+				log.error("Error processing execution results: {}", e.getMessage(), e);
+				return new AgentExecResult("Error processing execution results: " + e.getMessage(),
+						AgentState.IN_PROGRESS);
+			}
+		}).exceptionally(e -> {
+			log.error("Error executing tools: {}", e.getMessage(), e);
+			return new AgentExecResult("Error executing tools: " + e.getMessage(), AgentState.IN_PROGRESS);
+		});
+	}
+
+	/**
+	 * Internal class to represent a tool execution task
+	 */
+	private static class ExecutionTask {
+
+		final ToolCall toolCall;
+
+		final ActToolParam param;
+
+		final ToolCallBackContext toolCallBackContext;
+
+		final int index; // Original index for maintaining order
+
+		ExecutionTask(ToolCall toolCall, ActToolParam param, ToolCallBackContext toolCallBackContext, int index) {
+			this.toolCall = toolCall;
+			this.param = param;
+			this.toolCallBackContext = toolCallBackContext;
+			this.index = index;
+		}
+
+		boolean isFormInputTool() {
+			return toolCallBackContext != null && toolCallBackContext.getFunctionInstance() instanceof FormInputTool;
+		}
+
+		boolean isTerminableTool() {
+			return toolCallBackContext != null && toolCallBackContext.getFunctionInstance() instanceof TerminableTool;
+		}
+
+	}
+
+	/**
+	 * Build execution tasks from tool calls
+	 * @param toolCalls List of tool calls to execute
+	 * @return List of execution tasks
+	 */
+	private List<ExecutionTask> buildExecutionTasks(List<ToolCall> toolCalls) {
+		List<ExecutionTask> tasks = new ArrayList<>();
+
+		for (int i = 0; i < toolCalls.size(); i++) {
+			ToolCall toolCall = toolCalls.get(i);
+			ActToolParam param = actToolInfoList.get(i);
+			ToolCallBackContext context = getToolCallBackContext(toolCall.name());
+
+			tasks.add(new ExecutionTask(toolCall, param, context, i));
+		}
+
+		return tasks;
+	}
+
+	/**
+	 * Execute tasks sequentially (used when FormInputTool is present)
+	 * @param tasks List of execution tasks
+	 * @return CompletableFuture that completes with list of execution results
+	 */
+	private CompletableFuture<List<Map<String, Object>>> executeTasksSequentially(List<ExecutionTask> tasks) {
+		Map<String, ToolCallBackContext> toolCallbackMap = toolCallbackProvider.getToolCallBackContext();
+
+		// Create parent ToolContext
+		Map<String, Object> parentContextMap = new HashMap<>();
+		parentContextMap.put("planDepth", getPlanDepth());
+		addRecursiveCallChainToContext(parentContextMap);
+		ToolContext parentToolContext = new ToolContext(parentContextMap);
+
+		// Start with an empty list CompletableFuture
+		CompletableFuture<List<Map<String, Object>>> chain = CompletableFuture.completedFuture(new ArrayList<>());
+
+		for (ExecutionTask task : tasks) {
+			// Use final to ensure each iteration captures a different task
+			final ExecutionTask currentTask = task;
+			// Chain each task sequentially
+			chain = chain.thenCompose(results -> {
+				// Check for interruption
+				if (agentInterruptionHelper != null
+						&& !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
+					// Add interrupted result
+					Map<String, Object> interruptedResult = new HashMap<>();
+					interruptedResult.put("index", currentTask.index);
+					interruptedResult.put("status", "INTERRUPTED");
+					interruptedResult.put("error", "Execution interrupted");
+					results.add(interruptedResult);
+					return CompletableFuture.completedFuture(results);
+				}
+
+				// Special handling for FormInputTool
+				if (currentTask.isFormInputTool()) {
+					return executeFormInputToolAsync(currentTask).thenApply(formResult -> {
+						results.add(formResult);
+						return results;
+					});
+				}
+				else {
+					// Use ParallelExecutionService to execute (unified interface even for
+					// sequential)
+					Map<String, Object> params = parseToolArguments(currentTask.toolCall.arguments());
+
+					// Create tool-specific ToolContext
+					Map<String, Object> toolContextMap = new HashMap<>();
+					toolContextMap.putAll(parentToolContext.getContext());
+					toolContextMap.put("toolcallId", currentTask.param.getToolCallId());
+					ToolContext toolContext = new ToolContext(toolContextMap);
+
+					return parallelExecutionService
+						.executeTool(currentTask.toolCall.name(), params, toolCallbackMap, toolContext,
+								currentTask.index)
+						.thenApply(result -> {
+							results.add(result);
+							return results;
+						});
+				}
+			});
+		}
+
+		// Sort by original index to maintain order
+		return chain.thenApply(results -> {
+			results.sort((a, b) -> {
+				Integer indexA = (Integer) a.get("index");
+				Integer indexB = (Integer) b.get("index");
+				return Integer.compare(indexA != null ? indexA : 0, indexB != null ? indexB : 0);
+			});
+			return results;
+		});
+	}
+
+	/**
+	 * Execute tasks in parallel (used when FormInputTool is not present)
+	 * @param tasks List of execution tasks
+	 * @return CompletableFuture that completes with list of execution results
+	 */
+	private CompletableFuture<List<Map<String, Object>>> executeTasksInParallel(List<ExecutionTask> tasks) {
+		// Build ParallelExecutionRequest list
+		List<ParallelExecutionService.ParallelExecutionRequest> executions = new ArrayList<>();
+
+		for (ExecutionTask task : tasks) {
+			Map<String, Object> params = parseToolArguments(task.toolCall.arguments());
+			executions.add(new ParallelExecutionService.ParallelExecutionRequest(task.toolCall.name(), params,
+					task.param.getToolCallId()));
+		}
+
+		// Create parent ToolContext
+		Map<String, Object> parentContextMap = new HashMap<>();
+		parentContextMap.put("planDepth", getPlanDepth());
+		addRecursiveCallChainToContext(parentContextMap);
+		ToolContext parentToolContext = new ToolContext(parentContextMap);
+
+		// Use ParallelExecutionService to execute in parallel
+		Map<String, ToolCallBackContext> toolCallbackMap = toolCallbackProvider.getToolCallBackContext();
+
+		return parallelExecutionService.executeToolsInParallel(executions, toolCallbackMap, parentToolContext);
+	}
+
+	/**
+	 * Execute FormInputTool with special handling (async version). This method
+	 * asynchronously handles form input waiting without blocking business threads.
+	 * @param task Execution task containing FormInputTool
+	 * @return CompletableFuture that completes with execution result in unified format
+	 */
+	private CompletableFuture<Map<String, Object>> executeFormInputToolAsync(ExecutionTask task) {
+		FormInputTool formInputTool = (FormInputTool) task.toolCallBackContext.getFunctionInstance();
+
 		try {
-			// Check for interruption before tool execution
-			if (agentInterruptionHelper != null
-					&& !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
-				log.info("Agent {} tool execution interrupted for rootPlanId: {}", getName(), getRootPlanId());
-				return new AgentExecResult("Tool execution interrupted by user", AgentState.INTERRUPTED);
+			// Parse tool arguments to UserFormInput object
+			FormInputTool.UserFormInput formInput;
+			if (task.toolCall.arguments() != null && !task.toolCall.arguments().trim().isEmpty()) {
+				formInput = objectMapper.readValue(task.toolCall.arguments(), FormInputTool.UserFormInput.class);
+			}
+			else {
+				log.warn("FormInputTool called with empty arguments, creating empty form");
+				formInput = new FormInputTool.UserFormInput();
 			}
 
-			// Execute tool call
-			toolExecutionResult = toolCallingManager.executeToolCalls(userPrompt, response);
-			processMemory(toolExecutionResult);
+			// Call run() first to set the state to AWAITING_USER_INPUT
+			// This is necessary because FormInputTool is a singleton and may have a stale
+			// state
+			formInputTool.run(formInput);
 
-			// Get tool response message
-			ToolResponseMessage toolResponseMessage = (ToolResponseMessage) toolExecutionResult.conversationHistory()
-				.get(toolExecutionResult.conversationHistory().size() - 1);
+			// Asynchronously handle the form input tool logic
+			return handleFormInputToolAsync(formInputTool, task.param).thenApply(formResult -> {
+				// Convert to unified result format
+				Map<String, Object> result = new HashMap<>();
+				result.put("index", task.index);
+				result.put("status", "SUCCESS");
+				result.put("output", formResult.getResult());
+				result.put("agentState", formResult.getState().name());
+				return result;
+			});
+		}
+		catch (Exception e) {
+			log.error("Error executing FormInputTool: {}", e.getMessage(), e);
+			Map<String, Object> errorResult = new HashMap<>();
+			errorResult.put("index", task.index);
+			errorResult.put("status", "ERROR");
+			errorResult.put("error", "Error executing FormInputTool: " + e.getMessage());
+			return CompletableFuture.completedFuture(errorResult);
+		}
+	}
 
-			if (toolResponseMessage.getResponses().isEmpty()) {
-				return new AgentExecResult("Tool response is empty", AgentState.IN_PROGRESS);
+	/**
+	 * Process execution results and build memory
+	 * @param tasks List of execution tasks
+	 * @param executionResults List of execution results
+	 * @return AgentExecResult containing the final result
+	 */
+	private AgentExecResult processExecutionResults(List<ExecutionTask> tasks,
+			List<Map<String, Object>> executionResults) {
+
+		// Validate result count
+		if (executionResults.size() != tasks.size()) {
+			String errorMsg = String.format("Result count mismatch: expected %d, got %d", tasks.size(),
+					executionResults.size());
+			log.error(errorMsg);
+			return new AgentExecResult(errorMsg, AgentState.IN_PROGRESS);
+		}
+
+		// Process each result
+		List<String> resultList = new ArrayList<>();
+		List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
+		boolean shouldTerminate = false;
+
+		for (int i = 0; i < tasks.size(); i++) {
+			ExecutionTask task = tasks.get(i);
+			Map<String, Object> result = executionResults.get(i);
+
+			// Extract result
+			String status = (String) result.get("status");
+			String processedResult;
+
+			if ("SUCCESS".equals(status)) {
+				Object outputObj = result.get("output");
+				processedResult = (outputObj != null) ? processToolResult(outputObj.toString()) : "No output";
+			}
+			else {
+				Object errorObj = result.get("error");
+				processedResult = "Error: " + (errorObj != null ? errorObj.toString() : "Unknown error");
 			}
 
-			// Process single tool response
-			ToolResponseMessage.ToolResponse toolCallResponse = toolResponseMessage.getResponses().get(0);
-			String toolName = toolCall.name();
-			ActToolParam param = actToolInfoList.get(0);
+			// Update ActToolParam
+			task.param.setResult(processedResult);
 
-			// Check if tool callback context exists
-			ToolCallBackContext toolCallBackContext = getToolCallBackContext(toolName);
-			if (toolCallBackContext == null) {
-				String errorMessage = String.format("Tool callback context not found for tool: %s", toolName);
-				log.error(errorMessage);
-				// Process tool result even if callback context is missing
-				String result = processToolResult(toolCallResponse.responseData());
-				param.setResult(result);
-				// Return error result but continue execution
-				return new AgentExecResult(errorMessage + ". Tool response: " + result, AgentState.IN_PROGRESS);
-			}
-
-			ToolCallBiFunctionDef<?> toolInstance = toolCallBackContext.getFunctionInstance();
-
-			String result;
-			boolean shouldTerminate = false;
-
-			// Handle different tool types
-			if (toolInstance instanceof FormInputTool) {
-				AgentExecResult formResult = handleFormInputTool((FormInputTool) toolInstance, param);
-				result = formResult.getResult();
-				param.setResult(result);
-			}
-			else if (toolInstance instanceof TerminableTool) {
-				TerminableTool terminableTool = (TerminableTool) toolInstance;
-				result = processToolResult(toolCallResponse.responseData());
-				param.setResult(result);
-
-				// Handle TerminateTool specifically - set state to COMPLETED
-				if (toolInstance instanceof TerminateTool) {
-					log.info("TerminateTool called for planId: {}", getCurrentPlanId());
-					shouldTerminate = true;
-				}
-				// Handle ErrorReportTool specifically to extract errorMessage
-				else if (toolInstance instanceof ErrorReportTool) {
-					String errorMessage = extractAndSetErrorMessage(result, "ErrorReportTool");
-					recordErrorToolThinkingAndAction(param, "Error occurred during execution",
-							"ErrorReportTool called to report error", errorMessage);
-				}
-
+			// Check termination condition
+			if (task.isTerminableTool() && task.toolCallBackContext != null) {
+				TerminableTool terminableTool = (TerminableTool) task.toolCallBackContext.getFunctionInstance();
 				if (terminableTool.canTerminate()) {
-					log.info("TerminableTool can terminate for planId: {}", getCurrentPlanId());
+					shouldTerminate = true;
 					String rootPlanId = getRootPlanId();
 					if (rootPlanId != null) {
 						userInputService.removeFormInputTool(rootPlanId);
 					}
-					shouldTerminate = true;
-				}
-				else {
-					log.info("TerminableTool cannot terminate yet for planId: {}", getCurrentPlanId());
 				}
 			}
-			// Handle SystemErrorReportTool specifically to extract errorMessage
-			else if (toolInstance instanceof SystemErrorReportTool) {
-				result = processToolResult(toolCallResponse.responseData());
-				param.setResult(result);
-				String errorMessage = extractAndSetErrorMessage(result, "SystemErrorReportTool");
-				recordErrorToolThinkingAndAction(param, "System error occurred during execution",
-						"SystemErrorReportTool called to report system error", errorMessage);
+
+			// Handle error reporting tools
+			if (task.toolCallBackContext != null) {
+				ToolCallBiFunctionDef<?> toolInstance = task.toolCallBackContext.getFunctionInstance();
+				if (toolInstance instanceof ErrorReportTool) {
+					String errorMessage = extractAndSetErrorMessage(processedResult, "ErrorReportTool");
+					recordErrorToolThinkingAndAction(task.param, "Error occurred during execution",
+							"ErrorReportTool called to report error", errorMessage);
+				}
+				else if (toolInstance instanceof SystemErrorReportTool) {
+					String errorMessage = extractAndSetErrorMessage(processedResult, "SystemErrorReportTool");
+					recordErrorToolThinkingAndAction(task.param, "System error occurred during execution",
+							"SystemErrorReportTool called to report system error", errorMessage);
+				}
 			}
-			else {
-				// Regular tool
-				result = processToolResult(toolCallResponse.responseData());
-				param.setResult(result);
-				log.info("Tool {} executed successfully for planId: {}", toolName, getCurrentPlanId());
+
+			// Build result list
+			resultList.add(processedResult);
+			toolResponses
+				.add(new ToolResponseMessage.ToolResponse(task.toolCall.id(), task.toolCall.name(), processedResult));
+
+			// Check for repeated results (only for single result)
+			if (tasks.size() == 1) {
+				checkAndHandleRepeatedResult(processedResult);
 			}
-
-			// Execute shared post-tool flow
-			executePostToolFlow(toolInstance, toolCallResponse, result, List.of(param));
-
-			// Check for repeated results and force compress if detected
-			checkAndHandleRepeatedResult(result);
-
-			// Return result with appropriate state
-			// Note: Final result will be saved to conversation memory in
-			// handleCompletedExecution()
-			return new AgentExecResult(result, shouldTerminate ? AgentState.COMPLETED : AgentState.IN_PROGRESS);
 		}
-		catch (Exception e) {
-			log.error("Error executing single tool: {}", e.getMessage(), e);
-			processMemory(toolExecutionResult); // Process memory even on error
-			// For other errors, wrap exception with SystemErrorReportTool
-			List<AgentExecResult> emptyResults = new ArrayList<>();
-			return handleExceptionWithSystemErrorReport(e, emptyResults);
-		}
+
+		// Record results
+		recordActionResult(actToolInfoList);
+
+		// Build Memory
+		buildAndProcessMemory(toolResponses);
+
+		// Return result
+		String finalResult = tasks.size() == 1 ? resultList.get(0) : resultList.toString();
+
+		return new AgentExecResult(finalResult, shouldTerminate ? AgentState.COMPLETED : AgentState.IN_PROGRESS);
 	}
 
 	/**
-	 * Process multiple tools execution using parallel execution service Multiple tools
-	 * execution does not support TerminableTool and FormInputTool. If these tools are
-	 * present, return error message asking LLM to retry without them.
-	 * @param toolCalls List of tool calls to execute
-	 * @return AgentExecResult containing the execution results
+	 * Build and process memory from tool responses
+	 * @param toolResponses List of tool response messages
 	 */
-	private AgentExecResult processMultipleTools(List<ToolCall> toolCalls) {
-		// Check for interruption before starting
-		if (agentInterruptionHelper != null && !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
-			log.info("Agent {} tool execution interrupted before starting for rootPlanId: {}", getName(),
-					getRootPlanId());
-			return new AgentExecResult("Tool execution interrupted by user", AgentState.INTERRUPTED);
+	private void buildAndProcessMemory(List<ToolResponseMessage.ToolResponse> toolResponses) {
+		ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder().responses(toolResponses).build();
+
+		// Get AssistantMessage from agentStreamingResult if available, otherwise fall
+		// back to response
+		AssistantMessage assistantMessage;
+		if (agentStreamingResult != null && agentStreamingResult.hasToolCalls()) {
+			assistantMessage = agentStreamingResult.createAssistantMessage();
+		}
+		else {
+			assistantMessage = extractAssistantMessageFromResponse(response);
 		}
 
-		try {
-			// Check for TerminableTool and FormInputTool in multiple tools
-			List<String> restrictedToolNames = new ArrayList<>();
-			for (ToolCall toolCall : toolCalls) {
-				String toolName = toolCall.name();
-				ToolCallBackContext context = getToolCallBackContext(toolName);
-				if (context != null) {
-					ToolCallBiFunctionDef<?> toolInstance = context.getFunctionInstance();
-					if (toolInstance instanceof TerminableTool || toolInstance instanceof FormInputTool) {
-						restrictedToolNames.add(toolName);
-					}
-				}
-			}
+		// Build conversationHistory
+		List<Message> conversationHistory = new ArrayList<>();
+		conversationHistory.addAll(agentMessages);
+		conversationHistory.add(assistantMessage);
+		conversationHistory.add(toolResponseMessage);
 
-			// If restricted tools found, return error asking LLM to retry without them
-			if (!restrictedToolNames.isEmpty()) {
-				String errorMessage = String.format(
-						"Multiple tools execution does not support TerminableTool and FormInputTool. "
-								+ "Found restricted tools: %s. Please retry by calling tools separately, "
-								+ "excluding TerminableTool and FormInputTool from multiple tool calls.",
-						String.join(", ", restrictedToolNames));
-				log.warn("Multiple tools execution rejected: {}", errorMessage);
-				return new AgentExecResult(errorMessage, AgentState.IN_PROGRESS);
-			}
+		// Build ToolExecutionResult
+		ToolExecutionResult toolExecutionResult = ToolExecutionResult.builder()
+			.conversationHistory(conversationHistory)
+			.returnDirect(false)
+			.build();
 
-			// Execute all tools in parallel using ParallelExecutionService
-			if (parallelExecutionService == null) {
-				log.error("ParallelExecutionService is not available");
-				return new AgentExecResult("Parallel execution service is not available", AgentState.COMPLETED);
-			}
-
-			Map<String, ToolCallBackContext> toolCallbackMap = toolCallbackProvider.getToolCallBackContext();
-			Map<String, Object> toolContextMap = new HashMap<>();
-			toolContextMap.put("planDepth", getPlanDepth());
-			ToolContext parentToolContext = new ToolContext(toolContextMap);
-
-			// Create execution requests for each tool with their corresponding toolCallId
-			// This ensures the toolCallId used during execution matches the one in
-			// ActToolParam
-			List<ParallelExecutionService.ParallelExecutionRequest> executions = new ArrayList<>();
-			for (int i = 0; i < toolCalls.size() && i < actToolInfoList.size(); i++) {
-				ToolCall toolCall = toolCalls.get(i);
-				ActToolParam param = actToolInfoList.get(i);
-				Map<String, Object> params = parseToolArguments(toolCall.arguments());
-				// Pass the toolCallId from ActToolParam to ensure consistency
-				executions.add(new ParallelExecutionService.ParallelExecutionRequest(toolCall.name(), params,
-						param.getToolCallId()));
-			}
-
-			// Execute tools in parallel
-			CompletableFuture<List<Map<String, Object>>> executionFuture = parallelExecutionService
-				.executeToolsInParallel(executions, toolCallbackMap, parentToolContext);
-			List<Map<String, Object>> parallelResults = executionFuture.join();
-			log.info("Executed {} tools in parallel", parallelResults.size());
-
-			// Process results and update actToolInfoList
-			// Results are sorted by index, so they match the order of toolCalls
-			List<String> resultList = new ArrayList<>();
-			for (int i = 0; i < toolCalls.size() && i < actToolInfoList.size() && i < parallelResults.size(); i++) {
-				ToolCall toolCall = toolCalls.get(i);
-				String toolName = toolCall.name();
-				ActToolParam param = actToolInfoList.get(i);
-				Map<String, Object> result = parallelResults.get(i);
-
-				// Extract result from ParallelExecutionService format
-				String status = (String) result.get("status");
-				String processedResult;
-				if ("SUCCESS".equals(status)) {
-					Object outputObj = result.get("output");
-					processedResult = (outputObj != null) ? processToolResult(outputObj.toString()) : "No output";
-				}
-				else {
-					Object errorObj = result.get("error");
-					processedResult = "Error: " + (errorObj != null ? errorObj.toString() : "Unknown error");
-				}
-
-				param.setResult(processedResult);
-				resultList.add(processedResult);
-				log.info("Tool {} executed successfully for planId: {}", toolName, getCurrentPlanId());
-			}
-
-			// Record the results
-			recordActionResult(actToolInfoList);
-
-			// Update memory using ToolCallingManager (for compatibility)
-			try {
-				ToolExecutionResult toolExecutionResult = toolCallingManager.executeToolCalls(userPrompt, response);
-				processMemory(toolExecutionResult);
-			}
-			catch (Exception e) {
-				log.warn("Error processing memory after parallel execution: {}", e.getMessage());
-			}
-
-			// Return result
-			return new AgentExecResult(resultList.toString(), AgentState.IN_PROGRESS);
-		}
-		catch (Exception e) {
-			log.error("Error executing multiple tools: {}", e.getMessage(), e);
-			return new AgentExecResult("Error executing tools: " + e.getMessage(), AgentState.IN_PROGRESS);
-		}
+		// Update memory
+		processMemory(toolExecutionResult);
 	}
 
 	/**
-	 * Parse tool arguments from JSON string to Map
+	 * Extract AssistantMessage from ChatResponse
+	 * @param response The ChatResponse containing the assistant message
+	 * @return AssistantMessage with tool calls
+	 */
+	private AssistantMessage extractAssistantMessageFromResponse(ChatResponse response) {
+		// Find the generation with tool calls
+		Generation generation = response.getResults()
+			.stream()
+			.filter(g -> !CollectionUtils.isEmpty(g.getOutput().getToolCalls()))
+			.findFirst()
+			.orElseThrow(() -> new IllegalStateException("No tool calls found in response"));
+
+		return generation.getOutput();
+	}
+
+	/**
+	 * Parse tool arguments from JSON string to Map This method extracts valid JSON from
+	 * the arguments string, removing any descriptive text that the LLM might have
+	 * included.
 	 */
 	@SuppressWarnings("unchecked")
 	private Map<String, Object> parseToolArguments(String arguments) {
@@ -900,9 +1193,12 @@ public class DynamicAgent extends ReActAgent {
 			return new HashMap<>();
 		}
 
+		// Try to extract valid JSON from the arguments string
+		String cleanedArguments = extractJsonFromString(arguments);
+
 		try {
 			// Try to parse as JSON
-			Object parsed = objectMapper.readValue(arguments, Object.class);
+			Object parsed = objectMapper.readValue(cleanedArguments, Object.class);
 			if (parsed instanceof Map) {
 				return (Map<String, Object>) parsed;
 			}
@@ -914,15 +1210,329 @@ public class DynamicAgent extends ReActAgent {
 			}
 		}
 		catch (Exception e) {
-			log.warn("Failed to parse tool arguments as JSON: {}. Using empty map.", arguments);
-			return new HashMap<>();
+			// Try to fix common JSON issues (like unescaped newlines in string values)
+			try {
+				String fixedJson = fixJsonString(cleanedArguments);
+				Object parsed = objectMapper.readValue(fixedJson, Object.class);
+				if (parsed instanceof Map) {
+					return (Map<String, Object>) parsed;
+				}
+				else {
+					Map<String, Object> result = new HashMap<>();
+					result.put("value", parsed);
+					return result;
+				}
+			}
+			catch (Exception e2) {
+				log.warn("Failed to parse tool arguments as JSON: {}. Using empty map.", arguments, e);
+				return new HashMap<>();
+			}
 		}
 	}
 
 	/**
-	 * Handle FormInputTool specific logic with exclusive storage
+	 * Extract valid JSON from a string that may contain descriptive text. This method
+	 * finds the first valid JSON object or array in the string.
+	 * @param input The input string that may contain descriptive text and JSON
+	 * @return The extracted JSON string, or the original string if no JSON is found
 	 */
-	private AgentExecResult handleFormInputTool(FormInputTool formInputTool, ActToolParam param) {
+	private String extractJsonFromString(String input) {
+		if (input == null || input.trim().isEmpty()) {
+			return input;
+		}
+
+		String trimmed = input.trim();
+
+		// First, try to parse the entire string as JSON
+		try {
+			objectMapper.readTree(trimmed);
+			return trimmed;
+		}
+		catch (Exception e) {
+			// Not valid JSON, continue to extraction
+		}
+
+		// Try to find JSON object boundaries
+		int startIndex = findJsonStart(trimmed);
+		if (startIndex == -1) {
+			// No JSON found, return original
+			return trimmed;
+		}
+
+		int endIndex = findJsonEnd(trimmed, startIndex);
+		if (endIndex == -1) {
+			// No valid end found, return original
+			return trimmed;
+		}
+
+		String extracted = trimmed.substring(startIndex, endIndex + 1);
+
+		// Validate the extracted JSON
+		try {
+			objectMapper.readTree(extracted);
+			return extracted;
+		}
+		catch (Exception e) {
+			// Extracted string is not valid JSON, return original
+			return trimmed;
+		}
+	}
+
+	/**
+	 * Find the start index of a JSON object or array in the string.
+	 * @param input The input string
+	 * @return The index of '{' or '[', or -1 if not found
+	 */
+	private int findJsonStart(String input) {
+		for (int i = 0; i < input.length(); i++) {
+			char c = input.charAt(i);
+			if (c == '{' || c == '[') {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * Find the end index of a JSON object or array, handling nested structures.
+	 * @param input The input string
+	 * @param startIndex The start index of the JSON structure
+	 * @return The index of the matching closing brace/bracket, or -1 if not found
+	 */
+	private int findJsonEnd(String input, int startIndex) {
+		char startChar = input.charAt(startIndex);
+		char endChar = (startChar == '{') ? '}' : ']';
+
+		int depth = 1;
+		boolean inString = false;
+		boolean escaped = false;
+
+		for (int i = startIndex + 1; i < input.length(); i++) {
+			char c = input.charAt(i);
+
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+
+			if (c == '\\') {
+				escaped = true;
+				continue;
+			}
+
+			if (c == '"') {
+				inString = !inString;
+				continue;
+			}
+
+			if (inString) {
+				continue;
+			}
+
+			if (c == startChar) {
+				depth++;
+			}
+			else if (c == endChar) {
+				depth--;
+				if (depth == 0) {
+					return i;
+				}
+			}
+		}
+
+		return -1;
+	}
+
+	/**
+	 * Fix incorrectly escaped key-value pairs in JSON. Fixes the pattern "key\":\"value"
+	 * to "key":"value"
+	 * @param json The JSON string that may contain incorrectly escaped key-value pairs
+	 * @return Fixed JSON string
+	 */
+	private String fixIncorrectlyEscapedKeyValuePairs(String json) {
+		if (json == null || json.isEmpty()) {
+			return json;
+		}
+
+		// Pattern to fix: "key\":\"value" -> "key":"value"
+		// This happens when quotes around key-value pairs are incorrectly escaped
+		// We need to find patterns like: " followed by \" followed by : followed by \"
+		// This indicates an incorrectly escaped key-value separator
+		// We'll use a targeted replacement that checks context to ensure it's a key-value
+		// boundary
+
+		StringBuilder fixed = new StringBuilder();
+		int i = 0;
+		while (i < json.length()) {
+			// Look for the pattern: " followed by \" followed by : followed by \"
+			// This is the pattern ":\" which indicates incorrectly escaped key-value
+			// separator
+			if (i + 5 < json.length() && json.charAt(i) == '"' && json.charAt(i + 1) == '\\'
+					&& json.charAt(i + 2) == '"' && json.charAt(i + 3) == ':' && json.charAt(i + 4) == '\\'
+					&& json.charAt(i + 5) == '"') {
+				// Found the pattern ":\" - this is an incorrectly escaped key-value
+				// separator
+				// Check context to ensure this is indeed a key-value separator
+				// Look backwards to see if we're after a key name
+				boolean isValidContext = false;
+				if (i > 0) {
+					// Look backwards skipping whitespace to find the start of the key
+					int lookBack = i - 1;
+					while (lookBack >= 0 && Character.isWhitespace(json.charAt(lookBack))) {
+						lookBack--;
+					}
+					if (lookBack >= 0) {
+						char charBeforeSpace = json.charAt(lookBack);
+						// If we're after a quote (end of key name), comma, or opening
+						// brace, it's valid
+						if (charBeforeSpace == '"' || charBeforeSpace == ',' || charBeforeSpace == '{'
+								|| charBeforeSpace == '[') {
+							isValidContext = true;
+						}
+					}
+				}
+				else {
+					// At the start, could be valid if it's the first key
+					isValidContext = true;
+				}
+
+				if (isValidContext) {
+					// Fix: ":\" -> ":"
+					fixed.append('"');
+					fixed.append(':');
+					fixed.append('"');
+					i += 6; // Skip the 6 characters we just processed ("\":\")
+					continue;
+				}
+			}
+
+			// Not the pattern we're looking for, append character as-is
+			fixed.append(json.charAt(i));
+			i++;
+		}
+
+		return fixed.toString();
+	}
+
+	/**
+	 * Fix common JSON formatting issues, such as unescaped newlines, quotes, and other
+	 * special characters in string values. This method properly escapes all characters
+	 * that need to be escaped inside JSON string values.
+	 * @param json The JSON string that may contain formatting issues
+	 * @return Fixed JSON string with properly escaped characters
+	 */
+	private String fixJsonString(String json) {
+		if (json == null || json.isEmpty()) {
+			return json;
+		}
+
+		// First, fix the pattern "key\":\"value" -> "key":"value"
+		// This pattern occurs when quotes around key-value pairs are incorrectly escaped
+		json = fixIncorrectlyEscapedKeyValuePairs(json);
+
+		StringBuilder fixed = new StringBuilder();
+		boolean inString = false;
+		boolean escaped = false;
+
+		for (int i = 0; i < json.length(); i++) {
+			char c = json.charAt(i);
+
+			if (escaped) {
+				// We're in an escape sequence, just append the character
+				fixed.append(c);
+				escaped = false;
+				continue;
+			}
+
+			if (c == '\\') {
+				// Start of escape sequence
+				fixed.append(c);
+				escaped = true;
+				continue;
+			}
+
+			if (c == '"') {
+				if (inString) {
+					// We're inside a string, check if this is a valid string terminator
+					// Look ahead to see if this quote is followed by valid JSON structure
+					// Skip whitespace and check for comma, colon, closing brace/bracket
+					boolean isValidTerminator = false;
+					// Skip whitespace after the quote
+					int j = i + 1;
+					while (j < json.length() && Character.isWhitespace(json.charAt(j))) {
+						j++;
+					}
+					if (j < json.length()) {
+						char nextChar = json.charAt(j);
+						if (nextChar == ',' || nextChar == ':' || nextChar == '}' || nextChar == ']') {
+							// This looks like a valid string terminator
+							isValidTerminator = true;
+						}
+					}
+					else {
+						// End of string, must be terminator
+						isValidTerminator = true;
+					}
+
+					if (isValidTerminator) {
+						// Valid string terminator
+						inString = false;
+						fixed.append(c);
+					}
+					else {
+						// Unescaped quote inside string value - escape it
+						fixed.append("\\\"");
+					}
+				}
+				else {
+					// Start of string
+					inString = true;
+					fixed.append(c);
+				}
+				continue;
+			}
+
+			if (inString) {
+				// Inside a string value, escape special characters
+				if (c == '\n') {
+					fixed.append("\\n");
+				}
+				else if (c == '\r') {
+					fixed.append("\\r");
+				}
+				else if (c == '\t') {
+					fixed.append("\\t");
+				}
+				else if (c == '\b') {
+					fixed.append("\\b");
+				}
+				else if (c == '\f') {
+					fixed.append("\\f");
+				}
+				else if (c < 32) {
+					// Other control characters (ASCII < 32)
+					fixed.append(String.format("\\u%04x", (int) c));
+				}
+				else {
+					// Regular character, append as-is
+					fixed.append(c);
+				}
+			}
+			else {
+				// Outside string, append as-is
+				fixed.append(c);
+			}
+		}
+
+		return fixed.toString();
+	}
+
+	/**
+	 * Handle FormInputTool specific logic with exclusive storage (async version). This
+	 * method asynchronously waits for user input without blocking business threads.
+	 */
+	private CompletableFuture<AgentExecResult> handleFormInputToolAsync(FormInputTool formInputTool,
+			ActToolParam param) {
 		// Ensure the form input tool has the correct plan IDs set
 		formInputTool.setCurrentPlanId(getCurrentPlanId());
 		formInputTool.setRootPlanId(getRootPlanId());
@@ -940,43 +1550,50 @@ public class DynamicAgent extends ReActAgent {
 			if (!stored) {
 				log.error("Failed to store form for sub-plan {} due to lock timeout or interruption", currentPlanId);
 				param.setResult("Failed to store form due to system timeout");
-				return new AgentExecResult("Failed to store form due to system timeout", AgentState.COMPLETED);
+				return CompletableFuture.completedFuture(
+						new AgentExecResult("Failed to store form due to system timeout", AgentState.COMPLETED));
 			}
 
-			// Wait for user input or timeout
-			waitForUserInputOrTimeout(formInputTool);
+			// Asynchronously wait for user input or timeout
+			return waitForUserInputOrTimeoutAsync(formInputTool).thenApply(v -> {
+				// After waiting, check the state again
+				if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
+					log.info("User input received for rootPlanId: {} from sub-plan {}", rootPlanId, currentPlanId);
 
-			// After waiting, check the state again
-			if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
-				log.info("User input received for rootPlanId: {} from sub-plan {}", rootPlanId, currentPlanId);
+					ToolStateInfo stateInfo = formInputTool.getCurrentToolStateString();
+					UserMessage userMessage = UserMessage.builder()
+						.text("User input received for form: " + (stateInfo != null ? stateInfo.getStateString() : ""))
+						.build();
+					processUserInputToMemory(userMessage);
 
-				UserMessage userMessage = UserMessage.builder()
-					.text("User input received for form: " + formInputTool.getCurrentToolStateString())
-					.build();
-				processUserInputToMemory(userMessage);
+					// Update the result in actToolInfoList
+					param.setResult(stateInfo != null ? stateInfo.getStateString() : "");
+					return new AgentExecResult(param.getResult(), AgentState.IN_PROGRESS);
 
-				// Update the result in actToolInfoList
-				param.setResult(formInputTool.getCurrentToolStateString());
-				return new AgentExecResult(param.getResult(), AgentState.IN_PROGRESS);
+				}
+				else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
+					log.warn("Input timeout occurred for FormInputTool for rootPlanId: {} from sub-plan {}", rootPlanId,
+							currentPlanId);
 
-			}
-			else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
-				log.warn("Input timeout occurred for FormInputTool for rootPlanId: {} from sub-plan {}", rootPlanId,
-						currentPlanId);
+					UserMessage userMessage = UserMessage.builder().text("Input timeout occurred for form: ").build();
+					processUserInputToMemory(userMessage);
+					// Don't remove FormInputTool immediately on timeout - allow late
+					// submissions
+					// The tool will be cleaned up when the plan execution completes or
+					// when explicitly removed
+					// userInputService.removeFormInputTool(rootPlanId);
+					param.setResult("Input timeout occurred");
 
-				UserMessage userMessage = UserMessage.builder().text("Input timeout occurred for form: ").build();
-				processUserInputToMemory(userMessage);
-				userInputService.removeFormInputTool(rootPlanId);
-				param.setResult("Input timeout occurred");
-
-				return new AgentExecResult("Input timeout occurred.", AgentState.IN_PROGRESS);
-			}
-			else {
-				throw new RuntimeException("FormInputTool is not in the correct state");
-			}
+					return new AgentExecResult("Input timeout occurred.", AgentState.IN_PROGRESS);
+				}
+				else {
+					throw new RuntimeException("FormInputTool is not in the correct state");
+				}
+			});
 		}
 		else {
-			throw new RuntimeException("FormInputTool is not in the correct state");
+			return CompletableFuture.completedFuture(
+					new AgentExecResult("FormInputTool is not in AWAITING_USER_INPUT state", AgentState.FAILED));
 		}
 	}
 
@@ -1019,95 +1636,7 @@ public class DynamicAgent extends ReActAgent {
 	 * @return Processed result with unescaped JSON if applicable
 	 */
 	private String processToolResult(String result) {
-		if (result == null || result.trim().isEmpty()) {
-			return result;
-		}
-
-		// Try to parse and re-serialize if it's a valid JSON string
-		// This removes escaping that might have been added by DefaultToolCallingManager
-		try {
-			// First, try to parse as JSON object using LinkedHashMap to preserve order
-			// Try as Map first, if it fails, fall back to Object.class
-			Object jsonObject;
-			try {
-				jsonObject = objectMapper.readValue(result, new TypeReference<LinkedHashMap<String, Object>>() {
-				});
-			}
-			catch (Exception e) {
-				// If parsing as Map fails, try as generic Object
-				jsonObject = objectMapper.readValue(result, Object.class);
-			}
-
-			// Check if it's a Map with "output" field (from DefaultToolCallingManager
-			// format)
-			if (jsonObject instanceof Map<?, ?> map) {
-				Object outputValue = map.get("output");
-				if (outputValue instanceof String outputString) {
-					// The output field contains an escaped JSON string, parse it
-					try {
-						// Use TypeReference with LinkedHashMap to preserve property order
-						Object innerJsonObject = objectMapper.readValue(outputString,
-								new TypeReference<LinkedHashMap<String, Object>>() {
-								});
-						// Recursively convert any nested HashMaps to LinkedHashMaps
-						innerJsonObject = convertToLinkedHashMap(innerJsonObject);
-						// Create a new map with the parsed inner JSON object, preserving
-						// the "output" field
-						// Use LinkedHashMap to preserve insertion order
-						Map<String, Object> resultMap = new LinkedHashMap<>();
-						// Copy all entries from the original map (preserve order if it's
-						// already LinkedHashMap)
-						for (Map.Entry<?, ?> entry : map.entrySet()) {
-							if (entry.getKey() instanceof String key) {
-								resultMap.put(key, entry.getValue());
-							}
-						}
-						resultMap.put("output", innerJsonObject);
-						// Return the unescaped JSON string with output field preserved
-						return objectMapper.writeValueAsString(resultMap);
-					}
-					catch (Exception innerException) {
-						// If inner parsing fails, return the original map as-is
-						return objectMapper.writeValueAsString(jsonObject);
-					}
-				}
-				else {
-					// It's a Map but no "output" field or output is not a string,
-					// Convert to LinkedHashMap to preserve order, then re-serialize
-					Object convertedObject = convertToLinkedHashMap(jsonObject);
-					return objectMapper.writeValueAsString(convertedObject);
-				}
-			}
-			// If the parsed object is a String, it means the input was a JSON string
-			// (e.g., "\"{\\\"message\\\":[...]}\""), so we need to parse it again
-			else if (jsonObject instanceof String jsonString) {
-				// Try to parse the inner JSON string
-				try {
-					// Use TypeReference with LinkedHashMap to preserve property order
-					Object innerJsonObject = objectMapper.readValue(jsonString,
-							new TypeReference<LinkedHashMap<String, Object>>() {
-							});
-					// Recursively convert any nested HashMaps to LinkedHashMaps
-					innerJsonObject = convertToLinkedHashMap(innerJsonObject);
-					// Re-serialize the inner JSON object
-					return objectMapper.writeValueAsString(innerJsonObject);
-				}
-				catch (Exception innerException) {
-					// If inner parsing fails, return the parsed string as-is
-					return jsonString;
-				}
-			}
-			else {
-				// It's already a JSON object, convert to LinkedHashMap to preserve order,
-				// then re-serialize
-				Object convertedObject = convertToLinkedHashMap(jsonObject);
-				return objectMapper.writeValueAsString(convertedObject);
-			}
-		}
-		catch (Exception e) {
-			// If it's not valid JSON, return as-is
-			return result;
-		}
+		return result;
 	}
 
 	/**
@@ -1115,20 +1644,6 @@ public class DynamicAgent extends ReActAgent {
 	 */
 	private void recordActionResult(List<ActToolParam> actToolInfoList) {
 		planExecutionRecorder.recordActionResult(actToolInfoList);
-	}
-
-	/**
-	 * Execute shared post-tool flow - record action result This method is called after
-	 * tool execution to perform common post-processing
-	 * @param toolInstance The tool instance that was executed
-	 * @param toolCallResponse The tool call response
-	 * @param result The processed result string
-	 * @param actToolParams The action tool parameters
-	 */
-	private void executePostToolFlow(ToolCallBiFunctionDef<?> toolInstance,
-			ToolResponseMessage.ToolResponse toolCallResponse, String result, List<ActToolParam> actToolParams) {
-		// Record the result
-		recordActionResult(actToolParams);
 	}
 
 	/**
@@ -1172,8 +1687,23 @@ public class DynamicAgent extends ReActAgent {
 			String thinkActId = planIdDispatcher.generateThinkActId();
 			String finalErrorMessage = step.getErrorMessage() != null ? step.getErrorMessage() : errorMessage;
 
+			// Try to get model context limit if available, otherwise use null
+			Integer errorModelContextLimit = currentModelContextLimit;
+			if (errorModelContextLimit == null && llmService != null && llmService.getTokenLimitService() != null) {
+				String effectiveModelName = (modelName != null && !modelName.isEmpty()) ? modelName
+						: llmService.getDefaultModelName();
+				if (effectiveModelName != null && !effectiveModelName.trim().isEmpty()) {
+					try {
+						errorModelContextLimit = llmService.getTokenLimitService().getContextLimit(effectiveModelName);
+					}
+					catch (Exception e) {
+						log.debug("Could not get model context limit for error record: {}", e.getMessage());
+					}
+				}
+			}
+
 			ThinkActRecordParams errorParams = new ThinkActRecordParams(thinkActId, stepId, thinkInput, thinkOutput,
-					finalErrorMessage, List.of(param));
+					finalErrorMessage, null, null, errorModelContextLimit, List.of(param));
 			planExecutionRecorder.recordThinkingAndAction(step, errorParams);
 			log.info("Recorded thinking and action for error tool, stepId: {}", stepId);
 		}
@@ -1195,10 +1725,46 @@ public class DynamicAgent extends ReActAgent {
 			SystemErrorReportTool errorTool = new SystemErrorReportTool(getCurrentPlanId(), objectMapper);
 
 			// Build error message from latest exception
-			String errorMessage = buildErrorMessageFromLatestException();
+			String errorMessage = buildErrorMessageFromLatestException("think()");
 
-			// Create tool input
-			Map<String, Object> errorInput = Map.of("errorMessage", errorMessage);
+			// Build structured error input with context
+			Map<String, Object> errorInput = new HashMap<>();
+			errorInput.put("errorMessage", errorMessage);
+
+			// Add context fields
+			errorInput.put("functionName", "think()");
+			if (agentName != null && !agentName.isEmpty()) {
+				errorInput.put("agentName", agentName);
+			}
+			errorInput.put("stepNumber", getCurrentStep());
+
+			String effectiveModelName = modelName;
+			if (effectiveModelName == null || effectiveModelName.isEmpty()) {
+				effectiveModelName = llmService != null ? llmService.getDefaultModelName() : null;
+			}
+			if (effectiveModelName != null && !effectiveModelName.isEmpty()) {
+				errorInput.put("modelName", effectiveModelName);
+			}
+
+			// Add input token count if available
+			int inputTokenCount = -1;
+			if (agentStreamingResult != null && agentStreamingResult.getInputTokenCount() > 0) {
+				inputTokenCount = agentStreamingResult.getInputTokenCount();
+			}
+			else if (streamResult != null && streamResult.getInputTokenCount() > 0) {
+				inputTokenCount = streamResult.getInputTokenCount();
+			}
+			if (inputTokenCount > 0) {
+				errorInput.put("inputTokenCount", inputTokenCount);
+			}
+
+			// Add prompt summary if available
+			if (userPrompt != null && userPrompt.getInstructions() != null && !userPrompt.getInstructions().isEmpty()) {
+				String promptSummary = buildPromptSummary(userPrompt.getInstructions());
+				if (promptSummary != null && !promptSummary.isEmpty()) {
+					errorInput.put("promptSummary", promptSummary);
+				}
+			}
 
 			// Execute the error report tool
 			ToolExecuteResult toolResult = errorTool.run(errorInput);
@@ -1234,7 +1800,7 @@ public class DynamicAgent extends ReActAgent {
 		}
 		catch (Exception e) {
 			log.error("Failed to handle LLM timeout with SystemErrorReportTool", e);
-			String fallbackError = "LLM timeout error: " + buildErrorMessageFromLatestException();
+			String fallbackError = "LLM timeout error: " + buildErrorMessageFromLatestException("think()");
 			step.setErrorMessage(fallbackError);
 			return new AgentExecResult(fallbackError, AgentState.FAILED);
 		}
@@ -1303,8 +1869,7 @@ public class DynamicAgent extends ReActAgent {
 
 				// Force compress agent memory to break the loop
 				if (conversationMemoryLimitService != null) {
-					conversationMemoryLimitService.forceCompressAgentMemory(
-							llmService.getAgentMemory(lynxeProperties.getMaxMemory()), getCurrentPlanId());
+					agentMessages = conversationMemoryLimitService.forceCompressAgentMemory(agentMessages);
 				}
 
 				// Clear the recent results after compression
@@ -1321,42 +1886,271 @@ public class DynamicAgent extends ReActAgent {
 
 			if (!StringUtils.isBlank(userInput)) {
 				// Add user input to memory
-
-				llmService.getAgentMemory(lynxeProperties.getMaxMemory()).add(getCurrentPlanId(), userMessage);
-
+				agentMessages.add(userMessage);
 			}
 		}
+	}
+
+	/**
+	 * Check and compress memory if needed based on the full prompt token count. This
+	 * method calculates the token count of the complete prompt (systemMessage +
+	 * agentMessages + currentStepEnvMessage), compresses agentMessages if needed, checks
+	 * against model context limit, and returns the final input token count.
+	 * @param systemMessage System message
+	 * @param currentStepEnvMessage Current step environment message
+	 * @return The input token count of the final prompt (after compression if needed)
+	 * @throws TokenLimitExceededException if token count exceeds model context limit
+	 * after compression
+	 */
+	private int checkAndCompressMemoryIfNeeded(Message systemMessage, Message currentStepEnvMessage) {
+		// Build temporary prompt list to calculate total token count
+		List<Message> tempMessages = new ArrayList<>();
+		tempMessages.add(systemMessage);
+		if (agentMessages != null && !agentMessages.isEmpty()) {
+			tempMessages.addAll(agentMessages);
+		}
+		tempMessages.add(currentStepEnvMessage);
+
+		// Get token services
+		TokenCountService tokenCountService = llmService.getTokenCountService();
+		TokenLimitService tokenLimitService = llmService.getTokenLimitService();
+
+		// Calculate total token count using TokenCountService if available, otherwise use
+		// ConversationMemoryLimitService
+		int totalTokens;
+		if (tokenCountService != null) {
+			totalTokens = tokenCountService.countTokens(tempMessages);
+		}
+		else {
+			if (conversationMemoryLimitService == null) {
+				log.warn(
+						"Neither TokenCountService nor ConversationMemoryLimitService is available. Cannot calculate token count.");
+				// Return 0 as fallback - caller should handle this case
+				return 0;
+			}
+			totalTokens = conversationMemoryLimitService.calculateTotalTokens(tempMessages);
+		}
+
+		// Get model context limit (use modelContextLimit only, no sessionTokenLimit)
+		if (tokenLimitService == null) {
+			throw new IllegalStateException(
+					"TokenLimitService is not available. Cannot get token limit for memory compression.");
+		}
+
+		String effectiveModelName = (modelName != null && !modelName.isEmpty()) ? modelName
+				: llmService.getDefaultModelName();
+		if (effectiveModelName == null || effectiveModelName.trim().isEmpty()) {
+			throw new IllegalStateException(
+					"Model name is not available. Cannot get token limit for memory compression.");
+		}
+
+		int modelContextLimit = tokenLimitService.getContextLimit(effectiveModelName);
+		// Store for later use when recording ThinkActRecord
+		this.currentModelContextLimit = modelContextLimit;
+
+		// Get compression threshold (default 70%)
+		double compressionThreshold = lynxeProperties != null ? (lynxeProperties.getChatCompressionThreshold() != null
+				? lynxeProperties.getChatCompressionThreshold() : 0.7) : 0.7;
+		int thresholdTokens = (int) (modelContextLimit * compressionThreshold);
+
+		// Only compress if exceeding threshold
+		if (totalTokens <= thresholdTokens) {
+			log.debug(
+					"Full prompt token count ({} tokens) is within compression threshold ({} tokens, {}% of model limit {})",
+					totalTokens, thresholdTokens, (int) (compressionThreshold * 100), modelContextLimit);
+		}
+		else {
+			log.info(
+					"Full prompt token count ({} tokens) exceeds compression threshold ({} tokens, {}% of model limit {}). Compressing agentMessages...",
+					totalTokens, thresholdTokens, (int) (compressionThreshold * 100), modelContextLimit);
+
+			// Compress agentMessages (which already contains extraMessage if first round)
+			if (conversationMemoryLimitService != null && agentMessages != null && !agentMessages.isEmpty()) {
+				try {
+					agentMessages = conversationMemoryLimitService.forceCompressAgentMemory(agentMessages);
+
+					// Rebuild temp prompt with compressed agentMessages and recalculate
+					// token count
+					tempMessages.clear();
+					tempMessages.add(systemMessage);
+					tempMessages.addAll(agentMessages);
+					tempMessages.add(currentStepEnvMessage);
+
+					// Recalculate token count after compression
+					if (tokenCountService != null) {
+						totalTokens = tokenCountService.countTokens(tempMessages);
+					}
+					else {
+						totalTokens = conversationMemoryLimitService.calculateTotalTokens(tempMessages);
+					}
+
+					log.info(
+							"Compression completed. Agent memory now contains {} messages. Final prompt token count: {}",
+							agentMessages.size(), totalTokens);
+				}
+				catch (Exception e) {
+					log.warn("Failed to compress memory", e);
+					// Continue with original token count if compression fails
+				}
+			}
+		}
+
+		// Check token limit against model context limit (after compression)
+		// Note: tokenLimitService and effectiveModelName are guaranteed to be non-null at
+		// this point
+		// Check if token count exceeds model context limit
+		if (totalTokens > modelContextLimit) {
+			String errorMessage = String.format("Token limit exceeded: current=%d, limit=%d, model=%s", totalTokens,
+					modelContextLimit, effectiveModelName);
+			log.error(errorMessage);
+
+			// Last resort: Try aggressive compression one more time before throwing
+			// exception
+			if (conversationMemoryLimitService != null && agentMessages != null && !agentMessages.isEmpty()) {
+				try {
+					log.warn("Attempting aggressive compression as last resort. Current token count: {}, limit: {}",
+							totalTokens, modelContextLimit);
+
+					// Force compress agentMessages again with more aggressive settings
+					List<Message> compressedMessages = conversationMemoryLimitService
+						.forceCompressAgentMemory(agentMessages);
+
+					// Rebuild temp prompt with aggressively compressed agentMessages
+					tempMessages.clear();
+					tempMessages.add(systemMessage);
+					tempMessages.addAll(compressedMessages);
+					tempMessages.add(currentStepEnvMessage);
+
+					// Recalculate token count after aggressive compression
+					if (tokenCountService != null) {
+						totalTokens = tokenCountService.countTokens(tempMessages);
+					}
+					else {
+						totalTokens = conversationMemoryLimitService.calculateTotalTokens(tempMessages);
+					}
+
+					// Update agentMessages with compressed version
+					agentMessages = compressedMessages;
+
+					log.info(
+							"Aggressive compression completed. Agent memory now contains {} messages. Final prompt token count: {}",
+							agentMessages.size(), totalTokens);
+
+					// Check again if we're still over the limit after aggressive
+					// compression
+					if (totalTokens > modelContextLimit) {
+						String finalErrorMessage = String
+							.format("%s. Please reduce the input size or clear conversation history.", errorMessage);
+						log.error("Token limit still exceeded after aggressive compression: {}", finalErrorMessage);
+						throw new TokenLimitExceededException(totalTokens, modelContextLimit, effectiveModelName);
+					}
+					else {
+						log.info("Aggressive compression succeeded. Token count reduced to {} (limit: {})", totalTokens,
+								modelContextLimit);
+					}
+				}
+				catch (TokenLimitExceededException e) {
+					// Re-throw TokenLimitExceededException
+					throw e;
+				}
+				catch (Exception e) {
+					log.warn("Failed to perform aggressive compression as last resort", e);
+					// Throw original exception if compression fails
+					throw new TokenLimitExceededException(totalTokens, modelContextLimit, effectiveModelName);
+				}
+			}
+			else {
+				// No compression service available or no messages to compress
+				String finalErrorMessage = String
+					.format("%s. Please reduce the input size or clear conversation history.", errorMessage);
+				log.error(finalErrorMessage);
+				throw new TokenLimitExceededException(totalTokens, modelContextLimit, effectiveModelName);
+			}
+		}
+
+		log.info("User prompt token count: {}", totalTokens);
+		return totalTokens;
 	}
 
 	private void processMemory(ToolExecutionResult toolExecutionResult) {
 		if (toolExecutionResult == null) {
 			return;
 		}
-		// Process the conversation history to update memory
+
+		// Process the tool execution result messages to update memory
 		List<Message> messages = toolExecutionResult.conversationHistory();
 		if (messages.isEmpty()) {
 			return;
 		}
-		// clear current plan memory
-		llmService.getAgentMemory(lynxeProperties.getMaxMemory()).clear(getCurrentPlanId());
+
+		// Filter messages to keep only assistant message and tool_call message
+		// Also preserve compression summary messages (UserMessages with special metadata)
+		List<Message> messagesToAdd = new ArrayList<>();
 		for (Message message : messages) {
 			// exclude all system message
 			if (message instanceof SystemMessage) {
 				continue;
 			}
-			// exclude env data message
-			if (message instanceof UserMessage userMessage
-					&& userMessage.getMetadata().containsKey(CURRENT_STEP_ENV_DATA_KEY)) {
+			// exclude env data message, but preserve compression summary messages
+			if (message instanceof UserMessage) {
+				// Check if this is a compression summary message that should be preserved
+				Object compressionSummaryFlag = message.getMetadata()
+					.get(ConversationMemoryLimitService.COMPRESSION_SUMMARY_METADATA_KEY);
+				if (compressionSummaryFlag != null && Boolean.TRUE.equals(compressionSummaryFlag)) {
+					// This is a compression summary, preserve it in agent memory
+					messagesToAdd.add(message);
+					log.debug("Preserving compression summary message in agent memory for planId: {}",
+							getCurrentPlanId());
+				}
+				// Other UserMessages are excluded (env data messages)
 				continue;
 			}
 			// only keep assistant message and tool_call message
-			llmService.getAgentMemory(lynxeProperties.getMaxMemory()).add(getCurrentPlanId(), message);
+			messagesToAdd.add(message);
 		}
+
+		// Step 3: Clear current plan memory and add filtered messages to Agent Memory
+		agentMessages.clear();
+		agentMessages.addAll(messagesToAdd);
 	}
 
 	@Override
-	public AgentExecResult run() {
+	public CompletableFuture<AgentExecResult> run() {
 		return super.run();
+	}
+
+	@Override
+	protected void handleFailedExecution(List<AgentExecResult> results) {
+		log.info("Handling failed execution - performing cleanup");
+		// Perform cleanup when execution fails (e.g., LLM timeout)
+		String planId = getCurrentPlanId();
+		if (planId != null) {
+			try {
+				clearUp(planId);
+				log.info("Successfully cleaned up resources after failed execution for planId: {}", planId);
+			}
+			catch (Exception e) {
+				log.error("Error during cleanup after failed execution for planId: {}", planId, e);
+			}
+		}
+		super.handleFailedExecution(results);
+	}
+
+	@Override
+	protected void handleInterruptedExecution(List<AgentExecResult> results) {
+		log.info("Handling interrupted execution - performing cleanup");
+		// Perform cleanup when execution is interrupted
+		String planId = getCurrentPlanId();
+		if (planId != null) {
+			try {
+				clearUp(planId);
+				log.info("Successfully cleaned up resources after interrupted execution for planId: {}", planId);
+			}
+			catch (Exception e) {
+				log.error("Error during cleanup after interrupted execution for planId: {}", planId, e);
+			}
+		}
+		super.handleInterruptedExecution(results);
 	}
 
 	@Override
@@ -1364,6 +2158,53 @@ public class DynamicAgent extends ReActAgent {
 		super.handleCompletedExecution(results);
 		// Note: Final result will be saved to conversation memory in
 		// PlanFinalizer.handlePostExecution()
+	}
+
+	@Override
+	protected String generateFinalSummary() {
+		try {
+			log.info("Generating final summary for agent execution");
+
+			// Get all memory entries from agentMessages
+			List<Message> memoryEntries = new ArrayList<>(agentMessages);
+
+			if (memoryEntries.isEmpty()) {
+				return "No memory entries found for final summary";
+			}
+
+			// Use LLM to generate a concise summary
+			String summaryPrompt = """
+					Based on the completed steps, try to answer the user's original request.
+					If the current steps are insufficient to support answering the original request,
+					simply describe that the step limit has been reached and please try again.
+
+					""";
+			// Create a simple prompt for summary generation
+			UserMessage summaryRequest = new UserMessage(summaryPrompt);
+			memoryEntries.add(getThinkMessage());
+			memoryEntries.add(getNextStepWithEnvMessage());
+			memoryEntries.add(summaryRequest);
+			Prompt prompt = new Prompt(memoryEntries);
+
+			// Get LLM response for summary
+			ChatClient chatClient;
+			if (modelName == null || modelName.isEmpty()) {
+				chatClient = llmService.getDefaultDynamicAgentChatClient();
+			}
+			else {
+				chatClient = llmService.getDynamicAgentChatClient(modelName);
+			}
+			ChatResponse response = chatClient.prompt(prompt).call().chatResponse();
+
+			String summary = response.getResult().getOutput().getText();
+			log.info("Generated final summary: {}", summary);
+			return summary;
+
+		}
+		catch (Exception e) {
+			log.error("Failed to generate final summary", e);
+			return "Summary generation failed: " + e.getMessage();
+		}
 	}
 
 	@Override
@@ -1389,22 +2230,35 @@ public class DynamicAgent extends ReActAgent {
 	private Map<String, Object> getMergedData() {
 		Map<String, Object> data = new HashMap<>();
 		data.putAll(getInitSettingData());
-		data.put(AbstractPlanExecutor.EXECUTION_ENV_STRING_KEY, convertEnvDataToString());
+		data.put(CURRENT_STEP_ENV_DATA_KEY, convertEnvDataToString());
 		return data;
+	}
+
+	/**
+	 * Add recursive call chain to ToolContext map if available in initSettings
+	 * @param toolContextMap The ToolContext map to add the recursive call chain to
+	 */
+	@SuppressWarnings("unchecked")
+	private void addRecursiveCallChainToContext(Map<String, Object> toolContextMap) {
+		Map<String, Object> initSettings = getInitSettingData();
+		Object chainObj = initSettings.get(AbstractPlanExecutor.RECURSIVE_CALL_CHAIN_KEY);
+		if (chainObj instanceof List) {
+			List<?> chain = (List<?>) chainObj;
+			// Validate that all elements are strings
+			boolean allStrings = chain.stream().allMatch(item -> item instanceof String);
+			if (allStrings) {
+				toolContextMap.put(SubplanToolWrapper.RECURSIVE_CALL_CHAIN_KEY, chain);
+			}
+		}
 	}
 
 	@Override
 	protected Message getThinkMessage() {
 		Message baseThinkPrompt = super.getThinkMessage();
 		Message nextStepWithEnvMessage = getNextStepWithEnvMessage();
-		SystemMessage thinkMessage = new SystemMessage("""
-				<SystemInfo>
+		UserMessage thinkMessage = new UserMessage("""
 				%s
-				</SystemInfo>
-
-				<AgentInfo>
 				%s
-				</AgentInfo>
 				""".formatted(baseThinkPrompt.getText(), nextStepWithEnvMessage.getText()));
 		return thinkMessage;
 	}
@@ -1466,11 +2320,11 @@ public class DynamicAgent extends ReActAgent {
 		this.toolCallbackProvider = toolCallbackProvider;
 	}
 
-	protected String collectEnvData(String toolCallName) {
+	protected ToolStateInfo collectEnvData(String toolCallName) {
 		log.info("🔍 collectEnvData called for tool: {}", toolCallName);
 		Map<String, ToolCallBackContext> toolCallBackContext = toolCallbackProvider.getToolCallBackContext();
 
-		// Convert serviceGroup.toolName format to serviceGroup_toolName format if needed
+		// Convert serviceGroup.toolName format to serviceGroup-toolName format if needed
 		String lookupKey = toolCallName;
 		try {
 			String convertedKey = serviceGroupIndexService.constructFrontendToolKey(toolCallName);
@@ -1489,26 +2343,43 @@ public class DynamicAgent extends ReActAgent {
 			// Use getCurrentToolStateStringWithErrorHandler which provides unified error
 			// handling
 			// This method is available as a default method in the interface
-			String envData = functionInstance.getCurrentToolStateStringWithErrorHandler();
-			return envData != null ? envData : "";
+			ToolStateInfo envData = functionInstance.getCurrentToolStateStringWithErrorHandler();
+			return envData != null ? envData : new ToolStateInfo(lookupKey, "");
 		}
-		// If corresponding tool callback context is not found, return empty string
+		// If corresponding tool callback context is not found, return empty ToolStateInfo
 		log.warn("⚠️ No context found for tool: {} (lookup key: {})", toolCallName, lookupKey);
-		return "";
+		return new ToolStateInfo(lookupKey, "");
 	}
 
 	public void collectAndSetEnvDataForTools() {
 
 		Map<String, Object> toolEnvDataMap = new HashMap<>();
+		Map<String, ToolStateInfo> deduplicatedStateMap = new HashMap<>();
 
 		Map<String, Object> oldMap = getEnvData();
 		toolEnvDataMap.putAll(oldMap);
 
-		// Overwrite old data with new data
+		// Collect ToolStateInfo objects and deduplicate by key
 		for (String toolKey : availableToolKeys) {
-			String envData = collectEnvData(toolKey);
-			toolEnvDataMap.put(toolKey, envData);
+			ToolStateInfo stateInfo = collectEnvData(toolKey);
+			if (stateInfo != null && stateInfo.getStateString() != null
+					&& !stateInfo.getStateString().trim().isEmpty()) {
+				String dedupKey = stateInfo.getKey();
+				// Ignore ToolStateInfo with empty or null key
+				if (dedupKey != null && !dedupKey.trim().isEmpty()) {
+					// Deduplicate: if multiple tools have the same key, keep only the
+					// first one
+					if (!deduplicatedStateMap.containsKey(dedupKey)) {
+						deduplicatedStateMap.put(dedupKey, stateInfo);
+					}
+				}
+			}
+			// Still store individual tool data for backward compatibility
+			toolEnvDataMap.put(toolKey, stateInfo);
 		}
+
+		// Store deduplicated state map with a special key
+		toolEnvDataMap.put("_deduplicated_states", deduplicatedStateMap);
 		// log.debug("Collected tool environment data: {}", toolEnvDataMap);
 
 		setEnvData(toolEnvDataMap);
@@ -1517,115 +2388,115 @@ public class DynamicAgent extends ReActAgent {
 	public String convertEnvDataToString() {
 		StringBuilder envDataStringBuilder = new StringBuilder();
 
-		for (String toolKey : availableToolKeys) {
-			Object value = getEnvData().get(toolKey);
-			if (value == null || value.toString().isEmpty()) {
-				continue; // Skip tools with no data
+		// Use deduplicated states if available
+		Map<String, Object> envData = getEnvData();
+		@SuppressWarnings("unchecked")
+		Map<String, ToolStateInfo> deduplicatedStates = (Map<String, ToolStateInfo>) envData
+			.get("_deduplicated_states");
+
+		if (deduplicatedStates != null && !deduplicatedStates.isEmpty()) {
+			// Use deduplicated states
+			for (Map.Entry<String, ToolStateInfo> entry : deduplicatedStates.entrySet()) {
+				ToolStateInfo stateInfo = entry.getValue();
+				String key = entry.getKey();
+				// Ignore ToolStateInfo with empty or null key
+				if (key != null && !key.trim().isEmpty() && stateInfo != null && stateInfo.getStateString() != null
+						&& !stateInfo.getStateString().trim().isEmpty()) {
+					envDataStringBuilder.append(key).append(" context information:\n");
+					envDataStringBuilder.append("    ").append(stateInfo.getStateString()).append("\n");
+				}
 			}
-			envDataStringBuilder.append(toolKey).append(" context information:\n");
-			envDataStringBuilder.append("    ").append(value.toString()).append("\n");
+		}
+		else {
+			// Fallback to individual tool data (backward compatibility)
+			for (String toolKey : availableToolKeys) {
+				Object value = envData.get(toolKey);
+				if (value == null) {
+					continue;
+				}
+				if (value instanceof ToolStateInfo) {
+					ToolStateInfo stateInfo = (ToolStateInfo) value;
+					String key = stateInfo.getKey();
+					// Ignore ToolStateInfo with empty or null key
+					if (key != null && !key.trim().isEmpty() && stateInfo.getStateString() != null
+							&& !stateInfo.getStateString().trim().isEmpty()) {
+						envDataStringBuilder.append(toolKey).append(" context information:\n");
+						envDataStringBuilder.append("    ").append(stateInfo.getStateString()).append("\n");
+					}
+				}
+				else {
+					String valueStr = value.toString();
+					if (!valueStr.isEmpty()) {
+						envDataStringBuilder.append(toolKey).append(" context information:\n");
+						envDataStringBuilder.append("    ").append(valueStr).append("\n");
+					}
+				}
+			}
 		}
 
 		return envDataStringBuilder.toString();
 	}
 
-	// Add a method to wait for user input or handle timeout.
 	/**
-	 * Save user request (stepText) to conversation memory
+	 * Asynchronously wait for user input or timeout. This method executes in a dedicated
+	 * thread pool to avoid blocking business threads.
+	 * @param formInputTool The form input tool to wait for
+	 * @return CompletableFuture that completes when user input is received or timeout
+	 * occurs
 	 */
-	private void saveUserRequestToConversationMemory() {
-		// Skip if already saved (prevents duplicate saves during retries)
-		if (userRequestSavedToConversationMemory) {
-			log.debug("User request already saved to conversation memory, skipping");
-			return;
-		}
+	private CompletableFuture<Void> waitForUserInputOrTimeoutAsync(FormInputTool formInputTool) {
+		return CompletableFuture.runAsync(() -> {
+			log.info("Waiting for user input for planId: {}...", getCurrentPlanId());
+			long startTime = System.currentTimeMillis();
+			long lastInterruptionCheck = startTime;
+			// Get timeout from LynxeProperties and convert to milliseconds
+			long userInputTimeoutMs = getLynxeProperties().getUserInputTimeout() * 1000L;
+			long interruptionCheckIntervalMs = 2000L; // Check for interruption every 2
+														// seconds
 
-		// Skip if conversation memory is disabled
-		if (!lynxeProperties.getEnableConversationMemory()) {
-			log.debug("Conversation memory is disabled, skipping user request save");
-			return;
-		}
+			while (formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT) {
+				long currentTime = System.currentTimeMillis();
 
-		if (getConversationId() == null || getConversationId().trim().isEmpty()) {
-			log.debug("No conversationId available, skipping user request save");
-			return;
-		}
+				// Check for interruption periodically
+				if (currentTime - lastInterruptionCheck >= interruptionCheckIntervalMs) {
+					if (agentInterruptionHelper != null
+							&& !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
+						log.info("User input wait interrupted for rootPlanId: {}", getRootPlanId());
+						formInputTool.handleInputTimeout(); // Treat interruption as
+															// timeout
+						break;
+					}
+					lastInterruptionCheck = currentTime;
+				}
 
-		// Get stepText from initSettingData
-		Object stepTextObj = getInitSettingData().get(AbstractPlanExecutor.STEP_TEXT_KEY);
-		if (stepTextObj == null) {
-			log.debug("No stepText found in initSettingData, skipping user request save");
-			return;
-		}
-
-		String stepText = stepTextObj.toString();
-		if (stepText == null || stepText.trim().isEmpty()) {
-			log.debug("stepText is empty, skipping user request save");
-			return;
-		}
-
-		try {
-			UserMessage userMessage = new UserMessage(stepText);
-			llmService.addToConversationMemoryWithLimit(lynxeProperties.getMaxMemory(), getConversationId(),
-					userMessage);
-			userRequestSavedToConversationMemory = true; // Mark as saved
-			log.info("Saved user request to conversation memory for conversationId: {}, request length: {}",
-					getConversationId(), stepText.length());
-		}
-		catch (Exception e) {
-			log.warn("Failed to save user request to conversation memory for conversationId: {}", getConversationId(),
-					e);
-		}
-	}
-
-	private void waitForUserInputOrTimeout(FormInputTool formInputTool) {
-		log.info("Waiting for user input for planId: {}...", getCurrentPlanId());
-		long startTime = System.currentTimeMillis();
-		long lastInterruptionCheck = startTime;
-		// Get timeout from LynxeProperties and convert to milliseconds
-		long userInputTimeoutMs = getLynxeProperties().getUserInputTimeout() * 1000L;
-		long interruptionCheckIntervalMs = 2000L; // Check for interruption every 2
-													// seconds
-
-		while (formInputTool.getInputState() == FormInputTool.InputState.AWAITING_USER_INPUT) {
-			long currentTime = System.currentTimeMillis();
-
-			// Check for interruption periodically
-			if (currentTime - lastInterruptionCheck >= interruptionCheckIntervalMs) {
-				if (agentInterruptionHelper != null
-						&& !agentInterruptionHelper.checkInterruptionAndContinue(getRootPlanId())) {
-					log.info("User input wait interrupted for rootPlanId: {}", getRootPlanId());
-					formInputTool.handleInputTimeout(); // Treat interruption as timeout
+				if (currentTime - startTime > userInputTimeoutMs) {
+					log.warn("Timeout waiting for user input for planId: {}", getCurrentPlanId());
+					formInputTool.handleInputTimeout(); // This will change its state to
+					// INPUT_TIMEOUT
 					break;
 				}
-				lastInterruptionCheck = currentTime;
+				try {
+					// Poll for input state change. In a real scenario, this might involve
+					// a more sophisticated mechanism like a Future or a callback from the
+					// UI.
+					TimeUnit.MILLISECONDS.sleep(500); // Check every 500ms
+				}
+				catch (InterruptedException e) {
+					log.warn("Interrupted while waiting for user input for planId: {}", getCurrentPlanId());
+					Thread.currentThread().interrupt();
+					formInputTool.handleInputTimeout(); // Treat interruption as timeout
+														// for
+					// simplicity
+					break;
+				}
 			}
-
-			if (currentTime - startTime > userInputTimeoutMs) {
-				log.warn("Timeout waiting for user input for planId: {}", getCurrentPlanId());
-				formInputTool.handleInputTimeout(); // This will change its state to
-				// INPUT_TIMEOUT
-				break;
+			if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
+				log.info("User input received for planId: {}", getCurrentPlanId());
 			}
-			try {
-				// Poll for input state change. In a real scenario, this might involve
-				// a more sophisticated mechanism like a Future or a callback from the UI.
-				TimeUnit.MILLISECONDS.sleep(500); // Check every 500ms
+			else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
+				log.warn("User input timed out for planId: {}", getCurrentPlanId());
 			}
-			catch (InterruptedException e) {
-				log.warn("Interrupted while waiting for user input for planId: {}", getCurrentPlanId());
-				Thread.currentThread().interrupt();
-				formInputTool.handleInputTimeout(); // Treat interruption as timeout for
-				// simplicity
-				break;
-			}
-		}
-		if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_RECEIVED) {
-			log.info("User input received for planId: {}", getCurrentPlanId());
-		}
-		else if (formInputTool.getInputState() == FormInputTool.InputState.INPUT_TIMEOUT) {
-			log.warn("User input timed out for planId: {}", getCurrentPlanId());
-		}
+		}, FORM_INPUT_WAIT_EXECUTOR);
 	}
 
 }

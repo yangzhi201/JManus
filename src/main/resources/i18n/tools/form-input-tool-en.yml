@@ -11,7 +11,7 @@ parameters: |
           },
           "description": {
               "type": "string",
-              "description": "Description of the form and what information is being collected"
+              "description": "Description of the form and what information is being collected. Must be in Markdown format."
           },
           "inputs": {
               "type": "array",

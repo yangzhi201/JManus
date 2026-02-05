@@ -27,13 +27,6 @@
         minWidth: '220px',
       }"
     />
-    <span
-      onclick="event.stopPropagation()"
-      class="setting-icon-wrapper"
-      @click="handleChangeNamespace"
-    >
-      <Icon icon="carbon:settings-edit" class="setting-icon" width="20" />
-    </span>
   </div>
 </template>
 
@@ -42,16 +35,11 @@ import { onMounted } from 'vue'
 import CustomSelect from '@/components/select/index.vue'
 import { storeToRefs } from 'pinia'
 import { usenameSpaceStore } from '@/stores/namespace'
-import { Icon } from '@iconify/vue'
-import { useRoute, useRouter } from 'vue-router'
 import { notEmpty } from '@/utils'
 import { NamespaceApiService, type Namespace } from '@/api/namespace-api-service'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
-
-const route = useRoute()
-const router = useRouter()
 
 const namespaceStore = usenameSpaceStore()
 const { namespace, namespaces } = storeToRefs(namespaceStore)
@@ -113,28 +101,7 @@ const getAllNamespaces = async () => {
     }))
   )
 }
-const handleChangeNamespace = () => {
-  router.push({
-    name: route.name,
-    params: {
-      ...route.params,
-      category: 'namespace',
-    },
-    query: {
-      namespace: namespace.value,
-    },
-  })
-}
-
 onMounted(async () => {
   getAllNamespaces()
 })
 </script>
-
-<style scoped>
-.setting-icon {
-  color: #667eea;
-  margin-left: 4px;
-  cursor: pointer;
-}
-</style>

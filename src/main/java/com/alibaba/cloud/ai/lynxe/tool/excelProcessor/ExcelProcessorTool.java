@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -987,10 +988,11 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString;
 		try {
 			Map<String, Object> status = excelProcessingService.getProcessingStatus(currentPlanId);
-			return String.format("""
+			stateString = String.format("""
 					Current Excel Processing State:
 					- Plan ID: %s
 					- Supported file types: xlsx, xls
@@ -1003,12 +1005,13 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 					status.isEmpty() ? "No operations performed yet" : status.toString());
 		}
 		catch (Exception e) {
-			return String.format("""
+			stateString = String.format("""
 					Current Excel Processing State:
 					- Plan ID: %s
 					- Error getting status: %s
 					""", currentPlanId != null ? currentPlanId : "N/A", e.getMessage());
 		}
+		return new ToolStateInfo(null, stateString);
 	}
 
 	// Tool metadata methods
@@ -1166,7 +1169,7 @@ public class ExcelProcessorTool extends AbstractBaseTool<ExcelProcessorTool.Exce
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override

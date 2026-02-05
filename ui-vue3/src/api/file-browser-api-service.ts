@@ -28,6 +28,8 @@ export interface FileContent {
   content: string
   mimeType: string
   size: number
+  isBinary?: boolean
+  downloadOnly?: boolean
 }
 
 export interface ApiResponse<T> {

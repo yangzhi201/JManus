@@ -1,92 +1,38 @@
 description: |
-  Perform write operations on text files. This operator provides access to files
-  that can be accessed across all sub-plans within the same execution context.
+  Create new files or overwrite existing files completely (Write tool implementation).
+  This operator provides access to files that can be accessed across all sub-plans within the same execution context.
 
   Keywords: global files, root directory, root folder, root plan directory,
-  global file write operations, root file access, cross-plan files.
+  global file write operations, root file access, cross-plan files, write file, create file.
 
-  Supported operations:
-  - delete: Delete an existing file, requires file_path parameter
-  - replace: Perform exact string replacement in existing files (StrReplace tool)
-    * Performs precise, targeted edits without rewriting entire files
-    * CRITICAL: old_string must be unique in the file (will fail if multiple occurrences found)
-    * Matches are case-sensitive and whitespace-sensitive (must match exactly including indentation)
-    * new_string must be different from old_string
-    * File will be auto-created if it doesn't exist
-    * Only replaces the first (and only) occurrence
-  - write: Create new files or overwrite existing files completely (Write tool)
-    * Creates new files if they don't exist
-    * Completely overwrites existing files (all previous content is lost)
-    * Automatically creates parent directories if they don't exist
-    * MUST read file first before overwriting to prevent accidental data loss
-    * Prefer StrReplace for editing existing files when possible
-    * Only use Write for creating new files or complete file rewrites
+  Operation:
+  - Create new files or overwrite existing files completely
+    - file_path (required): Relative file path (filename or relative path, e.g., 'file.txt' or 'subdir/file.txt'). Parent directories will be created automatically if they don't exist.
+    - contents (required): The complete content to write to the file. This will be the entire file content after the operation. If file exists, all previous content will be overwritten.
+    - Creates new files if they don't exist
+    - Completely overwrites existing files (all previous content is lost)
+    - Automatically creates parent directories if they don't exist
+    - MUST read file first before overwriting to prevent accidental data loss
+    - Prefer StrReplace for editing existing files when possible
+    - Only use Write for creating new files or complete file rewrites
 
   Features:
   - Files created here are accessible by all sub-plans within the execution context
-  - Exact matching ensures precise replacements
-  - Uniqueness validation prevents accidental multiple replacements
+  - Automatically creates parent directories if they don't exist
 
 parameters: |
   {
       "type": "object",
-      "oneOf": [
-          {
-              "type": "object",
-              "properties": {
-                  "action": {
-                      "type": "string",
-                      "const": "delete"
-                  },
-                  "file_path": {
-                      "type": "string",
-                      "description": "Relative file path (filename or relative path, e.g., 'file.txt' or 'subdir/file.txt')"
-                  }
-              },
-              "required": ["action", "file_path"],
-              "additionalProperties": false
+      "properties": {
+          "file_path": {
+              "type": "string",
+              "description": "Relative file path (filename or relative path, e.g., 'file.txt' or 'subdir/file.txt'). Parent directories will be created automatically if they don't exist."
           },
-          {
-              "type": "object",
-              "properties": {
-                  "action": {
-                      "type": "string",
-                      "const": "replace"
-                  },
-                  "file_path": {
-                      "type": "string",
-                      "description": "Relative file path (filename or relative path, e.g., 'file.txt' or 'subdir/file.txt'). File will be auto-created if it doesn't exist."
-                  },
-                  "old_string": {
-                      "type": "string",
-                      "description": "The exact text to find and replace. Must match file content exactly (including all whitespace, indentation, line breaks). Must be unique in the file - if multiple occurrences exist, provide more context to make it unique."
-                  },
-                  "new_string": {
-                      "type": "string",
-                      "description": "The text to replace it with. Must be different from old_string. Can be an empty string to delete content."
-                  }
-              },
-              "required": ["action", "file_path", "old_string", "new_string"],
-              "additionalProperties": false
-          },
-          {
-              "type": "object",
-              "properties": {
-                  "action": {
-                      "type": "string",
-                      "const": "write"
-                  },
-                  "file_path": {
-                      "type": "string",
-                      "description": "Relative file path (filename or relative path, e.g., 'file.txt' or 'subdir/file.txt'). Parent directories will be created automatically if they don't exist."
-                  },
-                  "contents": {
-                      "type": "string",
-                      "description": "The complete content to write to the file. This will be the entire file content after the operation. If file exists, all previous content will be overwritten."
-                  }
-              },
-              "required": ["action", "file_path", "contents"],
-              "additionalProperties": false
+          "contents": {
+              "type": "string",
+              "description": "The complete content to write to the file. This will be the entire file content after the operation. If file exists, all previous content will be overwritten."
           }
-      ]
+      },
+      "required": ["file_path", "contents"],
+      "additionalProperties": false
   }

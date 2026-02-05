@@ -16,7 +16,7 @@
 <template>
   <div class="assigned-tools">
     <div class="section-header">
-      <span>{{ title }} ({{ filteredSelectedToolIds.length }})</span>
+      <span>{{ title }} ({{ allSelectedToolIds.length }})</span>
       <button class="action-btn small" @click="$emit('add-tools')" v-if="showAddButton">
         <Icon icon="carbon:add" />
         {{ addButtonText }}
@@ -27,24 +27,39 @@
       class="tools-grid"
       :class="{
         'grid-layout': useGridLayout,
-        'has-more-items': useGridLayout && filteredSelectedToolIds.length > 2,
+        'has-more-items': useGridLayout && allSelectedToolIds.length > 2,
       }"
     >
       <div
-        v-for="toolId in filteredSelectedToolIds"
+        v-for="toolId in allSelectedToolIds"
         :key="toolId"
-        class="tool-item assigned"
+        class="tool-item"
+        :class="{
+          assigned: isToolExists(toolId),
+          'non-existent': !isToolExists(toolId),
+        }"
         :title="getToolDescription(toolId)"
       >
         <div class="tool-info">
-          <span class="tool-name">{{ getToolDisplayNameWithGroup(toolId) }}</span>
-          <span class="tool-desc" :title="getToolDescription(toolId)">{{
-            getToolDescription(toolId)
-          }}</span>
+          <div class="tool-name-row">
+            <span class="tool-name">{{ getToolDisplayNameWithGroup(toolId) }}</span>
+            <Icon
+              v-if="!isToolExists(toolId)"
+              icon="carbon:warning"
+              class="tool-warning-icon"
+              :title="'Tool not found: ' + toolId"
+            />
+          </div>
+          <span v-if="isToolExists(toolId)" class="tool-desc" :title="getToolDescription(toolId)">
+            {{ getToolDescription(toolId) }}
+          </span>
+          <span v-else class="tool-warning-message">
+            {{ t('sidebar.toolNotExistWarning') }}
+          </span>
         </div>
       </div>
 
-      <div v-if="filteredSelectedToolIds.length === 0" class="no-tools">
+      <div v-if="allSelectedToolIds.length === 0" class="no-tools">
         <Icon icon="carbon:tool-box" />
         <span>{{ emptyText }}</span>
       </div>
@@ -55,7 +70,11 @@
 <script setup lang="ts">
 import { useAvailableToolsSingleton } from '@/composables/useAvailableTools'
 import { Icon } from '@iconify/vue'
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, watch, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+// I18n
+const { t } = useI18n()
 
 // Props
 interface Props {
@@ -91,28 +110,41 @@ onMounted(() => {
   }
 })
 
-// Computed property to filter out tools that are not in availableTools
-const filteredSelectedToolIds = computed(() => {
+// Computed property to return all selected tool IDs without filtering
+const allSelectedToolIds = computed(() => {
   if (!Array.isArray(props.selectedToolIds)) {
     return []
   }
-  return props.selectedToolIds.filter(toolId =>
-    availableTools.value.some(tool => tool.key === toolId)
-  )
+  return props.selectedToolIds
 })
 
-// Watch for changes in filtered tools and emit event
+// Helper method to check if a tool exists in availableTools
+const isToolExists = (toolId: string): boolean => {
+  return availableTools.value.some(tool => tool.key === toolId)
+}
+
+// Track last emitted filtered tools to prevent duplicate emissions
+const lastEmittedFilteredTools = ref<string[]>([])
+
+// Watch for changes in available tools and emit filtered tools event
+// This maintains backward compatibility for components that listen to tools-filtered
+// Only watch availableTools to avoid recursive updates when selectedToolIds changes
 watch(
-  filteredSelectedToolIds,
-  newFilteredTools => {
-    // Only emit if there's a difference (some tools were filtered out)
-    // Check if selectedToolIds is defined and is an array
+  availableTools,
+  () => {
     if (!Array.isArray(props.selectedToolIds)) {
       return
     }
-    const selectedLength = props.selectedToolIds.length
-    if (newFilteredTools.length !== selectedLength) {
-      emit('tools-filtered', newFilteredTools)
+    // Emit only existing tools for backward compatibility
+    const existingTools = props.selectedToolIds.filter(toolId => isToolExists(toolId))
+
+    // Only emit if the filtered list actually changed to prevent recursive updates
+    const existingToolsStr = existingTools.sort().join(',')
+    const lastEmittedStr = lastEmittedFilteredTools.value.sort().join(',')
+
+    if (existingToolsStr !== lastEmittedStr) {
+      lastEmittedFilteredTools.value = existingTools
+      emit('tools-filtered', existingTools)
     }
   },
   { immediate: true }
@@ -123,8 +155,9 @@ const getToolDisplayNameWithGroup = (toolId: string): string => {
   const tool = availableTools.value.find(t => t.key === toolId)
   if (!tool) return toolId
 
-  const group = tool.serviceGroup || 'Ungrouped'
-  return `${group}_${tool.name}`
+  // Use the tool.key directly as it already contains the correct format (serviceGroup-toolName)
+  // The backend returns keys in serviceGroup-toolName format with hyphens
+  return tool.key
 }
 
 const getToolDescription = (toolId: string): string => {
@@ -260,6 +293,16 @@ const getToolDescription = (toolId: string): string => {
   background: rgba(102, 126, 234, 0.1);
 }
 
+.tool-item.non-existent {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.tool-item.non-existent:hover {
+  border-color: rgba(251, 191, 36, 0.6);
+  background: rgba(251, 191, 36, 0.15);
+}
+
 .tool-info {
   display: flex;
   flex-direction: column;
@@ -267,10 +310,30 @@ const getToolDescription = (toolId: string): string => {
   flex: 1;
 }
 
+.tool-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.tool-warning-icon {
+  width: 16px;
+  height: 16px;
+  color: rgba(251, 191, 36, 0.9);
+  flex-shrink: 0;
+}
+
+.tool-warning-message {
+  font-size: 12px;
+  color: rgba(251, 191, 36, 0.8);
+  font-style: italic;
+  line-height: 1.3;
+}
+
 .tool-name {
   display: block;
   font-weight: 500;
-  margin-bottom: 4px;
   color: rgba(255, 255, 255, 0.9);
   font-size: 14px;
 }

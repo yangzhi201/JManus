@@ -95,11 +95,11 @@ public class ServiceGroupIndexService {
 	}
 
 	/**
-	 * Convert serviceGroup.toolName format to serviceGroup_toolName format This method
+	 * Convert serviceGroup.toolName format to serviceGroup-toolName format This method
 	 * handles the conversion from frontend format (serviceGroup.toolName) to backend
-	 * execution format (serviceGroup_toolName)
+	 * execution format (serviceGroup-toolName)
 	 * @param toolKey The tool key in serviceGroup.toolName format or other formats
-	 * @return The converted key in serviceGroup_toolName format, or the original key if
+	 * @return The converted key in serviceGroup-toolName format, or the original key if
 	 * conversion is not needed or failed
 	 */
 	public String constructFrontendToolKey(String toolKey) {
@@ -111,8 +111,8 @@ public class ServiceGroupIndexService {
 		// Use lastIndexOf to handle serviceGroups that may contain dots
 		int dotIndex = toolKey.lastIndexOf('.');
 		if (dotIndex > 0 && dotIndex < toolKey.length() - 1) {
-			// Convert to serviceGroup_toolName format
-			String qualifiedKey = toolKey.substring(0, dotIndex) + "_" + toolKey.substring(dotIndex + 1);
+			// Convert to serviceGroup-toolName format
+			String qualifiedKey = toolKey.substring(0, dotIndex) + "-" + toolKey.substring(dotIndex + 1);
 			log.debug("Converted tool key from '{}' to '{}'", toolKey, qualifiedKey);
 			return qualifiedKey;
 		}

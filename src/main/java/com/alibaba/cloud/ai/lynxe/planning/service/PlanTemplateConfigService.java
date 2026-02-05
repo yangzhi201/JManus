@@ -368,35 +368,75 @@ public class PlanTemplateConfigService {
 				log.info("Set default serviceGroup 'ungrouped' on PlanTemplate with ID: {}", planTemplateId);
 			}
 
-			// Auto-refresh inputSchema from saved plan JSON to ensure parameters are
-			// up-to-date
-			// This ensures that when users add new parameters (e.g., <<offset>>) and
-			// save,
-			// the inputSchema is automatically updated to reflect the new parameters
-			try {
-				String inputSchemaJson = generateInputSchemaFromPlanTemplate(planTemplateId);
-				savedTemplate.setInputSchema(inputSchemaJson);
-				funcAgentToolRepository.save(savedTemplate);
-
-				// Count parameters for logging
-				int parameterCount = 0;
+			// Priority: Use inputSchema from frontend toolConfig if provided
+			// This preserves user-defined parameter descriptions set in
+			// PublishServiceModal
+			PlanTemplateConfigVO.ToolConfigVO toolConfig = configVO.getToolConfig();
+			if (toolConfig != null && toolConfig.getInputSchema() != null && !toolConfig.getInputSchema().isEmpty()) {
+				// Use frontend-provided inputSchema, preserving user-set descriptions
 				try {
-					com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper.readTree(inputSchemaJson);
-					if (inputSchemaNode.isArray()) {
-						parameterCount = inputSchemaNode.size();
+					String inputSchemaJson = convertInputSchemaListToJson(toolConfig.getInputSchema());
+					savedTemplate.setInputSchema(inputSchemaJson);
+					funcAgentToolRepository.save(savedTemplate);
+
+					// Count parameters for logging
+					int parameterCount = 0;
+					try {
+						com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper
+							.readTree(inputSchemaJson);
+						if (inputSchemaNode.isArray()) {
+							parameterCount = inputSchemaNode.size();
+						}
 					}
+					catch (Exception e) {
+						log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(), e);
+					}
+
+					log.info(
+							"Using inputSchema from toolConfig for plan template {} with {} parameters (preserving user-defined descriptions)",
+							planTemplateId, parameterCount);
 				}
 				catch (Exception e) {
-					// Log parsing errors for debugging
-					log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(), e);
+					log.warn("Failed to convert inputSchema from toolConfig for plan template {}: {}", planTemplateId,
+							e.getMessage());
+					// Fall through to auto-generation if conversion fails
 				}
-
-				log.info("Auto-refreshed inputSchema for plan template {} with {} parameters", planTemplateId,
-						parameterCount);
 			}
-			catch (Exception e) {
-				log.warn("Failed to auto-refresh inputSchema for plan template {}: {}", planTemplateId, e.getMessage());
-				// Don't fail the entire save operation if inputSchema refresh fails
+
+			// Fallback: Auto-generate inputSchema from plan JSON only if frontend didn't
+			// provide one
+			// This ensures backward compatibility and handles cases where new parameters
+			// are added to plan JSON
+			if (savedTemplate.getInputSchema() == null || savedTemplate.getInputSchema().isEmpty()
+					|| savedTemplate.getInputSchema().equals("[]")) {
+				try {
+					String inputSchemaJson = generateInputSchemaFromPlanTemplate(planTemplateId);
+					savedTemplate.setInputSchema(inputSchemaJson);
+					funcAgentToolRepository.save(savedTemplate);
+
+					// Count parameters for logging
+					int parameterCount = 0;
+					try {
+						com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper
+							.readTree(inputSchemaJson);
+						if (inputSchemaNode.isArray()) {
+							parameterCount = inputSchemaNode.size();
+						}
+					}
+					catch (Exception e) {
+						// Log parsing errors for debugging
+						log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(), e);
+					}
+
+					log.info(
+							"Auto-generated inputSchema for plan template {} with {} parameters (no inputSchema provided in toolConfig)",
+							planTemplateId, parameterCount);
+				}
+				catch (Exception e) {
+					log.warn("Failed to auto-generate inputSchema for plan template {}: {}", planTemplateId,
+							e.getMessage());
+					// Don't fail the entire save operation if inputSchema refresh fails
+				}
 			}
 
 			// Convert entity to VO
@@ -597,15 +637,12 @@ public class PlanTemplateConfigService {
 				}
 				existingEntity.setToolDescription(toolDescription);
 
-				// Auto-refresh inputSchema from plan JSON to ensure it matches current
-				// parameters
-				// This is critical: when users add new parameters (e.g., <<offset>>) to
-				// plan JSON and save,
-				// the inputSchema must be refreshed from the latest plan version, not
-				// from the old toolConfig
-				// which may not have the new parameters yet
-				try {
-					String inputSchemaJson = generateInputSchemaFromPlanTemplate(configVO.getPlanTemplateId());
+				// Priority: Use inputSchema from frontend toolConfig if provided
+				// This preserves user-defined parameter descriptions set in
+				// PublishServiceModal
+				if (toolConfig.getInputSchema() != null && !toolConfig.getInputSchema().isEmpty()) {
+					// Use frontend-provided inputSchema, preserving user-set descriptions
+					String inputSchemaJson = convertInputSchemaListToJson(toolConfig.getInputSchema());
 					existingEntity.setInputSchema(inputSchemaJson);
 
 					// Count parameters for logging
@@ -622,15 +659,42 @@ public class PlanTemplateConfigService {
 					}
 
 					log.info(
-							"Auto-refreshed inputSchema for coordinator tool {} from plan template {} with {} parameters",
-							id, configVO.getPlanTemplateId(), parameterCount);
+							"Using inputSchema from toolConfig for coordinator tool {} with {} parameters (preserving user-defined descriptions)",
+							id, parameterCount);
 				}
-				catch (Exception e) {
-					log.warn(
-							"Failed to auto-refresh inputSchema for coordinator tool {}, falling back to toolConfig inputSchema: {}",
-							id, e.getMessage());
-					// Fallback to toolConfig inputSchema if auto-refresh fails
-					existingEntity.setInputSchema(convertInputSchemaListToJson(toolConfig.getInputSchema()));
+				else {
+					// Fallback: Auto-generate inputSchema from plan JSON only if frontend
+					// didn't provide one
+					// This ensures backward compatibility and handles cases where new
+					// parameters are added to plan JSON
+					try {
+						String inputSchemaJson = generateInputSchemaFromPlanTemplate(configVO.getPlanTemplateId());
+						existingEntity.setInputSchema(inputSchemaJson);
+
+						// Count parameters for logging
+						int parameterCount = 0;
+						try {
+							com.fasterxml.jackson.databind.JsonNode inputSchemaNode = objectMapper
+								.readTree(inputSchemaJson);
+							if (inputSchemaNode.isArray()) {
+								parameterCount = inputSchemaNode.size();
+							}
+						}
+						catch (Exception e) {
+							log.warn("Failed to parse inputSchema JSON for parameter count logging: {}", e.getMessage(),
+									e);
+						}
+
+						log.info(
+								"Auto-generated inputSchema for coordinator tool {} from plan template {} with {} parameters (no inputSchema provided in toolConfig)",
+								id, configVO.getPlanTemplateId(), parameterCount);
+					}
+					catch (Exception e) {
+						log.warn("Failed to auto-generate inputSchema for coordinator tool {}, using empty array: {}",
+								id, e.getMessage());
+						// Fallback to empty array if auto-generation fails
+						existingEntity.setInputSchema("[]");
+					}
 				}
 
 				// Force enableInternalToolcall to true

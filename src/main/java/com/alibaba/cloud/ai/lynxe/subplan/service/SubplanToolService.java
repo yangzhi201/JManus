@@ -149,13 +149,13 @@ public class SubplanToolService {
 						description = coordinatorToolConfig.getToolConfig().getToolDescription();
 					}
 
-					// Use qualified key format: serviceGroup_toolName (consistent with
+					// Use qualified key format: serviceGroup-toolName (consistent with
 					// PlanningFactory)
 					String serviceGroup = coordinatorTool.getServiceGroup();
 					String qualifiedKey;
 
 					if (serviceGroup != null && !serviceGroup.isEmpty()) {
-						qualifiedKey = serviceGroup + "_" + toolName;
+						qualifiedKey = serviceGroup + "-" + toolName;
 					}
 					else {
 						qualifiedKey = toolName;

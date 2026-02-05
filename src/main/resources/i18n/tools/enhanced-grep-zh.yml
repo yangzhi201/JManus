@@ -12,8 +12,8 @@ description: |
   - 结果限制：使用 head_limit 限制输出（默认：1000 个结果）
   
   ## 使用场景：
-  ✅ 使用 Grep：精确文本搜索、正则表达式匹配、已知符号/变量名查找、快速字符串定位
-  ❌ 不要使用 Grep：语义理解搜索（→ SemanticSearch）、文件名搜索（→ Glob）、读取已知文件（→ Read）
+  使用 Grep：精确文本搜索、正则表达式匹配、已知符号/变量名查找、快速字符串定位
+  不要使用 Grep：语义理解搜索（使用 SemanticSearch）、文件名搜索（使用 Glob）、读取已知文件（使用 Read）
   
   ## 支持的文件类型：
   java, py, js, ts, rust, go, cpp, md, json, xml, yaml, sql, sh, css, html

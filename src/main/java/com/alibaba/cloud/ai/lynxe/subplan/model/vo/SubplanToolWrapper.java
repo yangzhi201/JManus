@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 
+import com.alibaba.cloud.ai.lynxe.exception.RecursiveCallLimitExceededException;
 import com.alibaba.cloud.ai.lynxe.planning.model.vo.PlanTemplateConfigVO;
 import com.alibaba.cloud.ai.lynxe.planning.service.IPlanParameterMappingService;
 import com.alibaba.cloud.ai.lynxe.planning.service.PlanTemplateService;
@@ -35,6 +36,7 @@ import com.alibaba.cloud.ai.lynxe.runtime.service.PlanIdDispatcher;
 import com.alibaba.cloud.ai.lynxe.runtime.service.PlanningCoordinator;
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
 import com.alibaba.cloud.ai.lynxe.tool.AsyncToolCallBiFunctionDef;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -48,6 +50,10 @@ public class SubplanToolWrapper extends AbstractBaseTool<Map<String, Object>>
 		implements AsyncToolCallBiFunctionDef<Map<String, Object>> {
 
 	public static final String PARENT_PLAN_ID_ARG_NAME = "PLAN_PARENT_ID_ARG_NAME";
+
+	public static final String RECURSIVE_CALL_CHAIN_KEY = "recursiveCallChain";
+
+	public static final int MAX_CONSECUTIVE_RECURSIVE_CALLS = 10;
 
 	private static final Logger logger = LoggerFactory.getLogger(SubplanToolWrapper.class);
 
@@ -195,7 +201,40 @@ public class SubplanToolWrapper extends AbstractBaseTool<Map<String, Object>>
 			int subplanDepth = parentPlanDepth + 1;
 			logger.info("Parent plan depth: {}, subplan will have depth: {} (async)", parentPlanDepth, subplanDepth);
 
-			return executeSubplanWithToolCallIdAsync(input, toolCallId, subplanDepth);
+			// Extract recursive call chain and check limit
+			List<String> existingCallChain = extractRecursiveCallChainFromContext(toolContext);
+			String currentPlanTemplateId = coordinatorToolConfig != null ? coordinatorToolConfig.getPlanTemplateId()
+					: null;
+
+			if (currentPlanTemplateId != null) {
+				// Check if consecutive recursive calls exceed limit
+				if (checkRecursiveCallLimit(currentPlanTemplateId, existingCallChain)) {
+					int consecutiveCount = 0;
+					for (int i = existingCallChain.size() - 1; i >= 0; i--) {
+						if (currentPlanTemplateId.equals(existingCallChain.get(i))) {
+							consecutiveCount++;
+						}
+						else {
+							break;
+						}
+					}
+					logger.warn("Recursive call limit exceeded for tool: {}, planTemplateId: {}, count: {}", getName(),
+							currentPlanTemplateId, consecutiveCount);
+					throw new RecursiveCallLimitExceededException(currentPlanTemplateId, consecutiveCount,
+							MAX_CONSECUTIVE_RECURSIVE_CALLS);
+				}
+
+				// Build updated call chain
+				List<String> updatedCallChain = buildUpdatedCallChain(currentPlanTemplateId, existingCallChain);
+				logger.debug("Updated recursive call chain: {} (length: {})", updatedCallChain,
+						updatedCallChain.size());
+
+				return executeSubplanWithToolCallIdAsync(input, toolCallId, subplanDepth, updatedCallChain);
+			}
+			else {
+				logger.warn("Plan template ID is null, cannot track recursive calls for tool: {}", getName());
+				return executeSubplanWithToolCallIdAsync(input, toolCallId, subplanDepth, existingCallChain);
+			}
 		}
 		else {
 			return CompletableFuture.completedFuture(
@@ -228,8 +267,8 @@ public class SubplanToolWrapper extends AbstractBaseTool<Map<String, Object>>
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return "Ready";
+	public ToolStateInfo getCurrentToolStateString() {
+		return new ToolStateInfo(null, "Ready");
 	}
 
 	// Getter for the wrapped coordinator tool config
@@ -278,15 +317,91 @@ public class SubplanToolWrapper extends AbstractBaseTool<Map<String, Object>>
 	}
 
 	/**
+	 * Extract recursive call chain from ToolContext. This method looks for
+	 * recursiveCallChain in the tool context.
+	 * @param toolContext The tool context containing recursive call chain information
+	 * @return List of planTemplateIds representing the call chain, empty list if not
+	 * found
+	 */
+	@SuppressWarnings("unchecked")
+	private List<String> extractRecursiveCallChainFromContext(ToolContext toolContext) {
+		try {
+			Object chainObj = toolContext.getContext().get(RECURSIVE_CALL_CHAIN_KEY);
+			if (chainObj instanceof List) {
+				List<?> chain = (List<?>) chainObj;
+				// Validate that all elements are strings
+				boolean allStrings = chain.stream().allMatch(item -> item instanceof String);
+				if (allStrings) {
+					return new ArrayList<>((List<String>) chain);
+				}
+			}
+			return new ArrayList<>();
+		}
+		catch (Exception e) {
+			logger.warn("Error extracting recursive call chain from context: {}, defaulting to empty list",
+					e.getMessage());
+			return new ArrayList<>();
+		}
+	}
+
+	/**
+	 * Check if consecutive recursive calls exceed the limit. Counts consecutive
+	 * occurrences of the same planTemplateId from the end of the call chain.
+	 * @param planTemplateId The plan template ID to check
+	 * @param callChain The existing call chain
+	 * @return true if limit exceeded, false otherwise
+	 */
+	private boolean checkRecursiveCallLimit(String planTemplateId, List<String> callChain) {
+		if (planTemplateId == null || planTemplateId.trim().isEmpty()) {
+			return false; // Can't check if planTemplateId is missing
+		}
+		if (callChain == null || callChain.isEmpty()) {
+			return false; // First call, no recursion yet
+		}
+
+		// Count consecutive occurrences from the end
+		int consecutiveCount = 0;
+		for (int i = callChain.size() - 1; i >= 0; i--) {
+			if (planTemplateId.equals(callChain.get(i))) {
+				consecutiveCount++;
+			}
+			else {
+				break; // Stop counting when we hit a different planTemplateId
+			}
+		}
+
+		return consecutiveCount >= MAX_CONSECUTIVE_RECURSIVE_CALLS;
+	}
+
+	/**
+	 * Build updated call chain by adding the current planTemplateId to the existing
+	 * chain.
+	 * @param planTemplateId The current plan template ID to add
+	 * @param existingChain The existing call chain
+	 * @return Updated call chain with current planTemplateId appended
+	 */
+	private List<String> buildUpdatedCallChain(String planTemplateId, List<String> existingChain) {
+		List<String> updatedChain = new ArrayList<>();
+		if (existingChain != null) {
+			updatedChain.addAll(existingChain);
+		}
+		if (planTemplateId != null && !planTemplateId.trim().isEmpty()) {
+			updatedChain.add(planTemplateId);
+		}
+		return updatedChain;
+	}
+
+	/**
 	 * Execute subplan asynchronously with the provided toolCallId. This method returns a
 	 * CompletableFuture to avoid blocking.
 	 * @param input The input parameters for the subplan
 	 * @param toolCallId The toolCallId to use for this execution
 	 * @param planDepth The depth of the subplan in the execution hierarchy
+	 * @param recursiveCallChain The recursive call chain to propagate
 	 * @return CompletableFuture that completes with the tool execution result
 	 */
 	private CompletableFuture<ToolExecuteResult> executeSubplanWithToolCallIdAsync(Map<String, Object> input,
-			String toolCallId, int planDepth) {
+			String toolCallId, int planDepth, List<String> recursiveCallChain) {
 		try {
 			String planTemplateId = coordinatorToolConfig != null ? coordinatorToolConfig.getPlanTemplateId() : null;
 			if (planTemplateId == null) {
@@ -346,8 +461,10 @@ public class SubplanToolWrapper extends AbstractBaseTool<Map<String, Object>>
 			// Sub-plans should use the same conversationId as parent, but it's not
 			// available in this context
 			// Use HTTP_REQUEST as subplans are internal calls
+			// Pass recursive call chain to track recursive calls
 			CompletableFuture<PlanExecutionResult> future = planningCoordinator.executeByPlan(plan, rootPlanId,
-					currentPlanId, newPlanId, toolCallId, RequestSource.HTTP_REQUEST, null, planDepth, null);
+					currentPlanId, newPlanId, toolCallId, RequestSource.HTTP_REQUEST, null, planDepth, null,
+					recursiveCallChain);
 
 			// Transform the future result into ToolExecuteResult without blocking
 			return future.thenApply(result -> {

@@ -16,6 +16,7 @@
 package com.alibaba.cloud.ai.lynxe.agent;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 import com.alibaba.cloud.ai.lynxe.config.LynxeProperties;
 import com.alibaba.cloud.ai.lynxe.llm.LlmService;
@@ -66,30 +67,32 @@ public abstract class ReActAgent extends BaseAgent {
 	 *
 	 * Example implementations: - ToolCallAgent: execute selected tool calls -
 	 * BrowserAgent: execute browser operations
-	 * @return description of action execution results
+	 * @return CompletableFuture that completes with description of action execution
+	 * results
 	 */
-	protected abstract AgentExecResult act();
+	protected abstract CompletableFuture<AgentExecResult> act();
 
 	/**
 	 * Execute a complete think-act step
-	 * @return returns thinking complete message if no action is needed, otherwise returns
-	 * action execution result
+	 * @return CompletableFuture that completes with thinking complete message if no
+	 * action is needed, otherwise returns action execution result
 	 */
 	@Override
-	public AgentExecResult step() {
+	public CompletableFuture<AgentExecResult> step() {
 		try {
 			boolean shouldAct = think();
 			if (!shouldAct) {
 				AgentExecResult result = new AgentExecResult("Thinking complete - no action needed",
 						AgentState.IN_PROGRESS);
 
-				return result;
+				return CompletableFuture.completedFuture(result);
 			}
 			return act();
 		}
 		catch (com.alibaba.cloud.ai.lynxe.runtime.service.TaskInterruptionCheckerService.TaskInterruptedException e) {
 			// Agent was interrupted, return INTERRUPTED state to stop execution
-			return new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.INTERRUPTED);
+			return CompletableFuture.completedFuture(
+					new AgentExecResult("Agent execution interrupted: " + e.getMessage(), AgentState.INTERRUPTED));
 		}
 	}
 

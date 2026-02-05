@@ -16,6 +16,7 @@
 package com.alibaba.cloud.ai.lynxe.tool.code;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -73,8 +74,8 @@ public class PythonExecute extends AbstractBaseTool<PythonExecute.PythonInput> {
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return String.format("""
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString = String.format("""
 				Python Executor Status:
 				- Runtime Environment: Python3
 				(%s)
@@ -98,6 +99,7 @@ public class PythonExecute extends AbstractBaseTool<PythonExecute.PythonInput> {
 				hasError ? "❌ Failed with errors" : "✅ Success", hasError ? lastError : "No errors",
 				lastExecutionLogId.isEmpty() ? "N/A" : lastExecutionLogId, !lastExecutionResult.isEmpty()
 						? lastExecutionResult : (hasError ? "Execution failed due to errors" : "No output available"));
+		return new ToolStateInfo(null, stateString);
 	}
 
 	public ToolExecuteResult run(String toolInput) {
@@ -234,7 +236,7 @@ public class PythonExecute extends AbstractBaseTool<PythonExecute.PythonInput> {
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override

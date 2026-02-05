@@ -45,8 +45,8 @@ RUN apt-get update && \
         fonts-liberation \
         fonts-dejavu-core \
         fonts-noto-cjk && \
-    # Install Node.js 18.x
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    # Install Node.js 20.x
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y --no-install-recommends nodejs && \
     # Install Playwright browser dependencies
     apt-get install -y --no-install-recommends \

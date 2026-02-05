@@ -1,11 +1,12 @@
 # Spring AI Alibaba Lynxe
-
 <div align="center">
 
 [![License](https://img.shields.io/badge/license-Apache%202-blue.svg)](LICENSE)
 [![Java](https://img.shields.io/badge/Java-17+-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![GitHub Stars](https://img.shields.io/github/stars/alibaba/spring-ai-alibaba.svg)](https://github.com/alibaba/spring-ai-alibaba/stargazers)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/spring-ai-alibaba/Lynxe)
+
 
 🌍 [English](./README.md) | [中文](./README-zh.md)
 
@@ -53,6 +54,7 @@ Get Lynxe up and running in under 5 minutes:
 ### Prerequisites
 
 - 🌐 **DashScope API Key** (or alternative AI model provider)
+  > 💡 **Get your DashScope API Key**: Visit [Alibaba Cloud Console](https://bailian.console.aliyun.com/?tab=model#/api-key), create an API Key in the key management page and copy the key. New users can enjoy 1 million input tokens and 1 million output tokens free quota (valid for 90 days).
 - ☕ **Java 17+** (for running JAR files or source code execution) or 🐳 **Docker** (for containerized deployment)
 
 ### Method 1: Using GitHub Release (Recommended)
@@ -76,7 +78,7 @@ java -jar lynxe.jar
 
 After the application starts, navigate to `http://localhost:18080` in your browser.
 
-> 💡 **Guided Setup**: After the application starts, it will automatically display a guided setup page. On the first page, select your language (English/Chinese), then on the second page, enter your DashScope API key that you just obtained to complete the configuration.
+> 💡 **Guided Setup**: After the application starts, it will automatically display a guided setup page. On the first page, select your language (English/Chinese), then on the second page, enter your DashScope API key to complete the configuration. New users can enjoy 1 million input tokens and 1 million output tokens free quota (valid for 90 days). Visit [Alibaba Cloud Console](https://bailian.console.aliyun.com/?tab=model#/api-key) to get your free API key.
 
 🎉 **Congratulations!** Your multi-agent system has been quickly started. You can visit https://github.com/talk-flow/public-usecase to explore some effective practices we recommend.
 
@@ -130,7 +132,7 @@ docker run -d \
 
 After the container starts, navigate to `http://localhost:18080` in your browser.
 
-> 💡 **Guided Setup**: After the application starts, it will automatically display a guided setup page. On the first page, select your language (English/Chinese), then on the second page, enter your DashScope API key that you just obtained to complete the configuration.
+> 💡 **Guided Setup**: After the application starts, it will automatically display a guided setup page. On the first page, select your language (English/Chinese), then on the second page, enter your DashScope API key to complete the configuration. New users can enjoy 1 million input tokens and 1 million output tokens free quota (valid for 90 days). Visit [Alibaba Cloud Console](https://bailian.console.aliyun.com/?tab=model#/api-key) to get your free API key.
 
 #### 📋 Useful Docker Commands
 
@@ -163,7 +165,7 @@ cd Lynxe
 
 #### 2. Database Configuration (Optional)
 
-> 💡 **Get your DashScope API Key**: Visit [Alibaba Cloud Console](https://bailian.console.aliyun.com/?tab=model#/api-key) to obtain your free API key.
+> 💡 **Get your DashScope API Key**: Visit [Alibaba Cloud Console](https://bailian.console.aliyun.com/?tab=model#/api-key), create an API Key in the key management page and copy the key. After running the JAR file, access `http://localhost:18080` in your browser, and enter your DashScope API key on the guided setup page to complete the configuration. New users can enjoy 1 million input tokens and 1 million output tokens free quota (valid for 90 days).
 >
 > **Using other providers?** Update the configuration in `src/main/resources/application.yml` to use your preferred AI model platform.
 

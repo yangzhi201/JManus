@@ -15,6 +15,7 @@
  */
 package com.alibaba.cloud.ai.lynxe.tool;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -58,6 +59,30 @@ public class SystemErrorReportTool extends AbstractBaseTool<Map<String, Object>>
 				    "errorMessage": {
 				      "type": "string",
 				      "description": "Detailed error message describing what went wrong during system execution. This message will be displayed in the execution details view."
+				    },
+				    "functionName": {
+				      "type": "string",
+				      "description": "Name of the function that failed (e.g., 'think()', 'act()')"
+				    },
+				    "modelName": {
+				      "type": "string",
+				      "description": "Model name being used when the error occurred"
+				    },
+				    "agentName": {
+				      "type": "string",
+				      "description": "Agent name that encountered the error"
+				    },
+				    "stepNumber": {
+				      "type": "number",
+				      "description": "Current step number when the error occurred"
+				    },
+				    "inputTokenCount": {
+				      "type": "number",
+				      "description": "Input token count when the error occurred"
+				    },
+				    "promptSummary": {
+				      "type": "string",
+				      "description": "Summary of the prompt/messages sent to the LLM"
 				    }
 				  },
 				  "required": ["errorMessage"]
@@ -66,8 +91,8 @@ public class SystemErrorReportTool extends AbstractBaseTool<Map<String, Object>>
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return String.format("""
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString = String.format("""
 				System Error Report Tool Status:
 				- Current State: %s
 				- Last Error: %s
@@ -79,6 +104,7 @@ public class SystemErrorReportTool extends AbstractBaseTool<Map<String, Object>>
 				lastErrorMessage.isEmpty() ? "N/A" : lastErrorMessage,
 				errorReportTimestamp.isEmpty() ? "N/A" : errorReportTimestamp,
 				currentPlanId != null ? currentPlanId : "N/A");
+		return new ToolStateInfo(null, stateString);
 	}
 
 	public SystemErrorReportTool(String planId) {
@@ -115,9 +141,33 @@ public class SystemErrorReportTool extends AbstractBaseTool<Map<String, Object>>
 		this.isErrorReported = true;
 		this.errorReportTimestamp = java.time.LocalDateTime.now().toString();
 
+		// Build error data map with all available context fields
+		Map<String, Object> errorData = new HashMap<>();
+		errorData.put("errorMessage", errorMessage);
+		errorData.put("timestamp", errorReportTimestamp);
+
+		// Add optional context fields if present
+		if (input.containsKey("functionName")) {
+			errorData.put("functionName", input.get("functionName"));
+		}
+		if (input.containsKey("modelName")) {
+			errorData.put("modelName", input.get("modelName"));
+		}
+		if (input.containsKey("agentName")) {
+			errorData.put("agentName", input.get("agentName"));
+		}
+		if (input.containsKey("stepNumber")) {
+			errorData.put("stepNumber", input.get("stepNumber"));
+		}
+		if (input.containsKey("inputTokenCount")) {
+			errorData.put("inputTokenCount", input.get("inputTokenCount"));
+		}
+		if (input.containsKey("promptSummary")) {
+			errorData.put("promptSummary", input.get("promptSummary"));
+		}
+
 		// Format the error message as JSON for storage
 		try {
-			Map<String, Object> errorData = Map.of("errorMessage", errorMessage, "timestamp", errorReportTimestamp);
 			String jsonString = objectMapper.writeValueAsString(errorData);
 			log.info("System error reported successfully for planId: {}, errorMessage: {}", currentPlanId,
 					errorMessage);
@@ -166,7 +216,7 @@ public class SystemErrorReportTool extends AbstractBaseTool<Map<String, Object>>
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override

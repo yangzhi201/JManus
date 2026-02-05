@@ -323,9 +323,10 @@ export function usePlanTemplateConfig() {
 
       // Update selectedTemplate.value to keep it in sync with the loaded config
       // This ensures RightPanel.vue uses the latest data from API, not stale data from template list
-      if (selectedTemplate.value?.planTemplateId === planTemplateId) {
+      // Always update if it matches the current planTemplateId, or if selectedTemplate is null/undefined
+      if (!selectedTemplate.value || selectedTemplate.value?.planTemplateId === planTemplateId) {
         selectedTemplate.value = {
-          ...selectedTemplate.value,
+          ...(selectedTemplate.value || {}),
           ...loadedConfig,
         }
       }

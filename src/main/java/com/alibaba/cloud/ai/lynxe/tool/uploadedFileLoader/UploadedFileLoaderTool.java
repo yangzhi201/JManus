@@ -32,6 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.filesystem.UnifiedDirectoryManager;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -142,74 +143,102 @@ public class UploadedFileLoaderTool extends AbstractBaseTool<UploadedFileLoaderT
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString;
 		if (currentPlanId == null || currentPlanId.trim().isEmpty()) {
 			log.warn("getCurrentToolStateString called with null or empty planId");
-			return "Uploaded Files State: No plan ID available";
+			stateString = "Uploaded Files State: No plan ID available";
 		}
-
-		// Check if rootPlanId is valid
-		if (rootPlanId == null || rootPlanId.trim().isEmpty()) {
+		else if (rootPlanId == null || rootPlanId.trim().isEmpty()) {
 			log.warn("getCurrentToolStateString called with null or empty rootPlanId");
-			return "Uploaded Files State: Invalid root plan ID";
+			stateString = "Uploaded Files State: Invalid root plan ID";
 		}
+		else {
+			log.debug("🔍 getCurrentToolStateString called for planId: {}", currentPlanId);
 
-		log.debug("🔍 getCurrentToolStateString called for planId: {}", currentPlanId);
+			try {
+				Path uploadsDir = directoryManager.getRootPlanDirectory(rootPlanId).resolve("uploads");
 
-		try {
-			Path uploadsDir = directoryManager.getRootPlanDirectory(rootPlanId).resolve("uploads");
+				if (!Files.exists(uploadsDir)) {
+					log.debug("No uploads directory found for plan: {}", currentPlanId);
+					// Try to find the most recent temporary plan with uploaded files
+					uploadsDir = findMostRecentTempPlanUploads();
+					if (uploadsDir == null) {
+						stateString = "Uploaded Files State: No uploads directory found for plan " + currentPlanId;
+					}
+					else {
+						log.debug("Found recent temp plan uploads directory: {}", uploadsDir);
+						long fileCount;
+						try (var stream = Files.list(uploadsDir)) {
+							fileCount = stream.filter(Files::isRegularFile).count();
+						}
+						log.debug("📁 Found {} files in uploads directory for plan {}", fileCount, currentPlanId);
+						if (fileCount > 0) {
+							stateString = String.format(
+									"""
+											Uploaded files available: %d files found in plan %s
 
-			if (!Files.exists(uploadsDir)) {
-				log.debug("No uploads directory found for plan: {}", currentPlanId);
-				// Try to find the most recent temporary plan with uploaded files
-				uploadsDir = findMostRecentTempPlanUploads();
-				if (uploadsDir == null) {
-					return "Uploaded Files State: No uploads directory found for plan " + currentPlanId;
+											🔧 To analyze these files, you must call the 'uploaded_file_loader' tool:
+											- No parameters needed - automatically provides comprehensive analysis with content preview and processing advice
+
+											Note: This tool provides analysis and recommendations. Use the recommended tools for actual file processing.
+
+											Example: Call uploaded_file_loader with no parameters
+											""",
+									fileCount, currentPlanId);
+							log.debug("🎯 Returning tool state with {} files", fileCount);
+						}
+						else {
+							log.debug("No files found in uploads directory for plan: {}", currentPlanId);
+							stateString = "Uploaded Files State: No files in uploads directory for plan "
+									+ currentPlanId;
+						}
+					}
 				}
-				log.debug("Found recent temp plan uploads directory: {}", uploadsDir);
+				else {
+					long fileCount;
+					try (var stream = Files.list(uploadsDir)) {
+						fileCount = stream.filter(Files::isRegularFile).count();
+					}
+
+					log.debug("📁 Found {} files in uploads directory for plan {}", fileCount, currentPlanId);
+
+					if (fileCount > 0) {
+						stateString = String.format(
+								"""
+										Uploaded files available: %d files found in plan %s
+
+										🔧 To analyze these files, you must call the 'uploaded_file_loader' tool:
+										- No parameters needed - automatically provides comprehensive analysis with content preview and processing advice
+
+										Note: This tool provides analysis and recommendations. Use the recommended tools for actual file processing.
+
+										Example: Call uploaded_file_loader with no parameters
+										""",
+								fileCount, currentPlanId);
+						log.debug("🎯 Returning tool state with {} files", fileCount);
+					}
+					else {
+						log.debug("No files found in uploads directory for plan: {}", currentPlanId);
+						stateString = "Uploaded Files State: No files in uploads directory for plan " + currentPlanId;
+					}
+				}
 			}
-
-			long fileCount;
-			try (var stream = Files.list(uploadsDir)) {
-				fileCount = stream.filter(Files::isRegularFile).count();
+			catch (IOException e) {
+				log.error("💥 IO error reading uploads directory for plan {}: {}", currentPlanId, e.getMessage(), e);
+				stateString = "Uploaded Files State: IO error reading uploads directory - " + e.getMessage();
 			}
-
-			log.debug("📁 Found {} files in uploads directory for plan {}", fileCount, currentPlanId);
-
-			if (fileCount > 0) {
-				String result = String.format(
-						"""
-								Uploaded files available: %d files found in plan %s
-
-								🔧 To analyze these files, you must call the 'uploaded_file_loader' tool:
-								- No parameters needed - automatically provides comprehensive analysis with content preview and processing advice
-
-								Note: This tool provides analysis and recommendations. Use the recommended tools for actual file processing.
-
-								Example: Call uploaded_file_loader with no parameters
-								""",
-						fileCount, currentPlanId);
-				log.debug("🎯 Returning tool state with {} files", fileCount);
-				return result;
-			}
-			else {
-				log.debug("No files found in uploads directory for plan: {}", currentPlanId);
-				return "Uploaded Files State: No files in uploads directory for plan " + currentPlanId;
+			catch (Exception e) {
+				log.error("💥 Unexpected error in getCurrentToolStateString for plan {}: {}", currentPlanId,
+						e.getMessage(), e);
+				stateString = "Uploaded Files State: Unexpected error - " + e.getMessage();
 			}
 		}
-		catch (IOException e) {
-			log.error("💥 IO error reading uploads directory for plan {}: {}", currentPlanId, e.getMessage(), e);
-			return "Uploaded Files State: IO error reading uploads directory - " + e.getMessage();
-		}
-		catch (Exception e) {
-			log.error("💥 Unexpected error in getCurrentToolStateString for plan {}: {}", currentPlanId, e.getMessage(),
-					e);
-			return "Uploaded Files State: Unexpected error - " + e.getMessage();
-		}
+		return new ToolStateInfo(null, stateString);
 	}
 
 	@Override

@@ -15,6 +15,7 @@
  */
 package com.alibaba.cloud.ai.lynxe.runtime.service;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -76,6 +77,28 @@ public class PlanningCoordinator {
 	public CompletableFuture<PlanExecutionResult> executeByPlan(PlanInterface plan, String rootPlanId,
 			String parentPlanId, String currentPlanId, String toolcallId, RequestSource requestSource, String uploadKey,
 			int planDepth, String conversationId) {
+		return executeByPlan(plan, rootPlanId, parentPlanId, currentPlanId, toolcallId, requestSource, uploadKey,
+				planDepth, conversationId, null);
+	}
+
+	/**
+	 * Execute plan with optional recursive call chain tracking
+	 * @param plan The plan to execute
+	 * @param rootPlanId Root plan ID
+	 * @param parentPlanId Parent plan ID
+	 * @param currentPlanId Current plan ID
+	 * @param toolcallId Tool call ID
+	 * @param requestSource Request source
+	 * @param uploadKey Upload key
+	 * @param planDepth Plan depth
+	 * @param conversationId Conversation ID
+	 * @param recursiveCallChain Recursive call chain (list of planTemplateIds), can be
+	 * null
+	 * @return CompletableFuture that completes with plan execution result
+	 */
+	public CompletableFuture<PlanExecutionResult> executeByPlan(PlanInterface plan, String rootPlanId,
+			String parentPlanId, String currentPlanId, String toolcallId, RequestSource requestSource, String uploadKey,
+			int planDepth, String conversationId, List<String> recursiveCallChain) {
 		try {
 			log.info("Starting direct plan execution for plan: {} at depth: {}", plan.getCurrentPlanId(), planDepth);
 
@@ -87,6 +110,10 @@ public class PlanningCoordinator {
 			context.setRootPlanId(rootPlanId);
 			context.setPlan(plan);
 			context.setPlanDepth(planDepth); // Set the plan depth
+			// Set recursive call chain if provided
+			if (recursiveCallChain != null) {
+				context.setRecursiveCallChain(recursiveCallChain);
+			}
 			boolean isVueRequest = requestSource.isVueRequest();
 			if (toolcallId == null && isVueRequest) {
 				context.setNeedSummary(true);

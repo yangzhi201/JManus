@@ -116,16 +116,6 @@ public abstract class AbstractExecutionPlan implements PlanInterface {
 		this.planningThinking = planningThinking;
 	}
 
-	@Override
-	public String getExecutionParams() {
-		return executionParams;
-	}
-
-	@Override
-	public void setExecutionParams(String executionParams) {
-		this.executionParams = executionParams != null ? executionParams : "";
-	}
-
 	// Abstract methods - must be implemented by subclasses
 
 	/**

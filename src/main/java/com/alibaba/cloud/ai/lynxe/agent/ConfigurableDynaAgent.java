@@ -21,6 +21,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.ToolCallback;
 
@@ -39,7 +40,6 @@ import com.alibaba.cloud.ai.lynxe.runtime.service.UserInputService;
 import com.alibaba.cloud.ai.lynxe.tool.TerminableTool;
 import com.alibaba.cloud.ai.lynxe.tool.TerminateTool;
 import com.alibaba.cloud.ai.lynxe.tool.mapreduce.ParallelExecutionService;
-import com.alibaba.cloud.ai.lynxe.workspace.conversation.service.MemoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -78,13 +78,13 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 			Map<String, Object> initialAgentSetting, UserInputService userInputService, String modelName,
 			StreamingResponseHandler streamingResponseHandler, ExecutionStep step, PlanIdDispatcher planIdDispatcher,
 			LynxeEventPublisher lynxeEventPublisher, AgentInterruptionHelper agentInterruptionHelper,
-			ObjectMapper objectMapper, ParallelExecutionService parallelExecutionService, MemoryService memoryService,
+			ObjectMapper objectMapper, ParallelExecutionService parallelExecutionService,
 			ConversationMemoryLimitService conversationMemoryLimitService,
-			ServiceGroupIndexService serviceGroupIndexService) {
+			ServiceGroupIndexService serviceGroupIndexService, List<Message> extraMessage) {
 		super(llmService, planExecutionRecorder, lynxeProperties, name, description, nextStepPrompt, availableToolKeys,
 				toolCallingManager, initialAgentSetting, userInputService, modelName, streamingResponseHandler, step,
 				planIdDispatcher, lynxeEventPublisher, agentInterruptionHelper, objectMapper, parallelExecutionService,
-				memoryService, conversationMemoryLimitService, serviceGroupIndexService);
+				conversationMemoryLimitService, serviceGroupIndexService, extraMessage);
 		this.serviceGroupIndexService = serviceGroupIndexService;
 	}
 
@@ -109,7 +109,7 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 		// Check if any TerminableTool is already included
 		boolean hasTerminableTool = false;
 		for (String toolKey : availableToolKeys) {
-			// Convert serviceGroup.toolName format to serviceGroup_toolName format if
+			// Convert serviceGroup.toolName format to serviceGroup-toolName format if
 			// needed
 			String lookupKey = convertServiceGroupToolNameToQualifiedKey(toolKey);
 			if (lookupKey == null) {
@@ -139,7 +139,7 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 		// Add TerminateTool if no TerminableTool is present
 		if (!hasTerminableTool) {
 			// Try to find TerminateTool by unqualified name first
-			// The qualified key format is now serviceGroup_toolName, so we search for it
+			// The qualified key format is now serviceGroup-toolName, so we search for it
 			ToolCallBackContext terminateToolContext = findToolByUnqualifiedName(toolCallBackContext,
 					TerminateTool.name);
 			if (terminateToolContext != null) {
@@ -168,7 +168,7 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 		for (String toolKey : availableToolKeys) {
 			ToolCallBackContext toolCallback = null;
 
-			// Convert serviceGroup.toolName format to serviceGroup_toolName format if
+			// Convert serviceGroup.toolName format to serviceGroup-toolName format if
 			// needed
 			String lookupKey = convertServiceGroupToolNameToQualifiedKey(toolKey);
 			if (lookupKey == null) {
@@ -201,10 +201,10 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 	}
 
 	/**
-	 * Convert serviceGroup.toolName format to serviceGroup_toolName format This method
+	 * Convert serviceGroup.toolName format to serviceGroup-toolName format This method
 	 * delegates to ServiceGroupIndexService for the conversion logic
 	 * @param toolKey The tool key in serviceGroup.toolName format or other formats
-	 * @return The converted key in serviceGroup_toolName format, or null if conversion is
+	 * @return The converted key in serviceGroup-toolName format, or null if conversion is
 	 * not needed
 	 */
 	private String convertServiceGroupToolNameToQualifiedKey(String toolKey) {
@@ -230,7 +230,7 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 
 	/**
 	 * Find a tool by unqualified name (backward compatibility helper) Searches for tools
-	 * where the qualified key is "toolName" or "serviceGroup_toolName" Uses
+	 * where the qualified key is "toolName" or "serviceGroup-toolName" Uses
 	 * ServiceGroupIndexService to construct qualified keys when serviceGroup is available
 	 * @param toolCallBackContext Map of all available tools
 	 * @param unqualifiedName The tool name without serviceGroup prefix
@@ -259,8 +259,8 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 			}
 		}
 
-		// Fallback: Then try to find by matching the tool name part after the underscore
-		// Format: serviceGroup_toolName or just toolName
+		// Fallback: Then try to find by matching the tool name part after the hyphen
+		// Format: serviceGroup-toolName or just toolName
 		for (Map.Entry<String, ToolCallBackContext> entry : toolCallBackContext.entrySet()) {
 			String qualifiedKey = entry.getKey();
 
@@ -269,10 +269,10 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 				return entry.getValue();
 			}
 
-			// Check if the qualified key is in format "serviceGroup_toolName"
-			int underscoreIndex = qualifiedKey.lastIndexOf('_');
-			if (underscoreIndex > 0 && underscoreIndex < qualifiedKey.length() - 1) {
-				String toolNamePart = qualifiedKey.substring(underscoreIndex + 1);
+			// Check if the qualified key is in format "serviceGroup-toolName"
+			int hyphenIndex = qualifiedKey.lastIndexOf('-');
+			if (hyphenIndex > 0 && hyphenIndex < qualifiedKey.length() - 1) {
+				String toolNamePart = qualifiedKey.substring(hyphenIndex + 1);
 				if (toolNamePart.equals(unqualifiedName)) {
 					log.debug("Backward compatibility: Matched unqualified tool '{}' to qualified key '{}'",
 							unqualifiedName, qualifiedKey);
@@ -305,9 +305,9 @@ public class ConfigurableDynaAgent extends DynamicAgent {
 					// Check if tool name matches
 					if (toolName.equals(actualToolName)) {
 						// If serviceGroup exists, construct qualified key in
-						// serviceGroup_toolName format
+						// serviceGroup-toolName format
 						if (serviceGroup != null && !serviceGroup.isEmpty()) {
-							String expectedQualifiedKey = serviceGroup + "_" + actualToolName;
+							String expectedQualifiedKey = serviceGroup + "-" + actualToolName;
 							// Check if the constructed key matches the entry key
 							if (entry.getKey().equals(expectedQualifiedKey)) {
 								log.debug("Found tool '{}' with serviceGroup '{}' using ServiceGroupIndexService",

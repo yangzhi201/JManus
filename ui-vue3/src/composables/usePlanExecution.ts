@@ -15,7 +15,6 @@
  */
 
 import { CommonApiService } from '@/api/common-api-service'
-import { useFileUploadSingleton } from '@/composables/useFileUpload'
 import { useTaskStore } from '@/stores/task'
 import type { PlanExecutionRecord } from '@/types/plan-execution-record'
 import { reactive, readonly, ref } from 'vue'
@@ -26,7 +25,7 @@ import { reactive, readonly, ref } from 'vue'
  */
 export function usePlanExecution() {
   // Polling configuration
-  const POLL_INTERVAL = 1000 // 1 second polling interval for responsive updates
+  const POLL_INTERVAL = 5000 // 5 second polling interval to reduce refresh frequency
   const MAX_RETRY_ATTEMPTS = 10 // Maximum retry attempts for plan not found
   const POST_COMPLETION_POLL_COUNT = 10 // Continue polling after completion to ensure summary is fetched
 
@@ -207,11 +206,9 @@ export function usePlanExecution() {
       if (details.completed) {
         console.log(`[usePlanExecution] Plan ${recordKey} completed, checking for summary...`)
 
-        // Mark task as no longer running
-        const taskStore = useTaskStore()
-        if (taskStore.currentTask && taskStore.currentTask.isRunning) {
-          taskStore.currentTask.isRunning = false
-        }
+        // Note: isRunning is now managed by messageDialog.watchEffect
+        // It will be reset when all plans are completed
+        // No need to manually set isRunning here
 
         // Check if we have summary or if we need to continue polling
         const hasSummary = details.summary || details.result || details.message
@@ -231,10 +228,8 @@ export function usePlanExecution() {
             pollCount: currentPollCount,
           })
 
-          // Clear uploaded files after successful execution (similar to execution state management)
-          const fileUpload = useFileUploadSingleton()
-          fileUpload.clearFiles()
-          console.log(`[usePlanExecution] Cleared uploaded files after execution completion`)
+          // Note: Uploaded files are NOT automatically cleared - users should remove them manually
+          // This allows users to reuse uploaded files across multiple plan executions
 
           // Delete execution details from backend
           try {

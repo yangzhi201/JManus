@@ -55,6 +55,10 @@ public class McpConfigVO {
 
 	private McpConfigStatus status;
 
+	private McpConnectionStatus connectionStatus;
+
+	private String connectionErrorMessage;
+
 	/**
 	 * Default constructor for Jackson deserialization
 	 */
@@ -217,12 +221,29 @@ public class McpConfigVO {
 		this.status = status;
 	}
 
+	public McpConnectionStatus getConnectionStatus() {
+		return connectionStatus;
+	}
+
+	public void setConnectionStatus(McpConnectionStatus connectionStatus) {
+		this.connectionStatus = connectionStatus;
+	}
+
+	public String getConnectionErrorMessage() {
+		return connectionErrorMessage;
+	}
+
+	public void setConnectionErrorMessage(String connectionErrorMessage) {
+		this.connectionErrorMessage = connectionErrorMessage;
+	}
+
 	@Override
 	public String toString() {
 		return "McpConfigVO{" + "id=" + id + ", mcpServerName='" + mcpServerName + '\'' + ", connectionType="
 				+ connectionType + ", connectionConfig='" + connectionConfig + '\'' + ", toolNames=" + toolNames
 				+ ", command='" + command + '\'' + ", url='" + url + '\'' + ", args='" + args + '\'' + ", env='" + env
-				+ '\'' + ", status=" + status + '}';
+				+ '\'' + ", status=" + status + ", connectionStatus=" + connectionStatus + ", connectionErrorMessage='"
+				+ connectionErrorMessage + '\'' + '}';
 	}
 
 }

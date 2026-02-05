@@ -17,7 +17,6 @@ package com.alibaba.cloud.ai.lynxe.config;
 
 import java.util.List;
 
-import io.micrometer.observation.ObservationRegistry;
 import org.springframework.ai.model.tool.DefaultToolCallingManager;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.tool.execution.DefaultToolExecutionExceptionProcessor;
@@ -30,6 +29,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.alibaba.cloud.ai.lynxe.agent.fix.DynamicAgentStreamingFix;
+
+import io.micrometer.observation.ObservationRegistry;
+
 /**
  * Manually configure ToolCallingManager to provide necessary beans after removing OpenAI
  * autoconfiguration
@@ -38,6 +41,20 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration
 public class ToolCallingManagerConfiguration {
+
+	/**
+	 * Configure DynamicAgentStreamingFix Bean (StreamAdvisor for fixing duplicate tool
+	 * calls)
+	 *
+	 * This advisor merges tool calls with the same ID that are split across multiple
+	 * chunks in streaming responses. It ensures that each tool call has complete fields
+	 * (id, name, arguments).
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	public DynamicAgentStreamingFix dynamicAgentStreamingFix() {
+		return new DynamicAgentStreamingFix();
+	}
 
 	/**
 	 * Configure ToolCallbackResolver Bean

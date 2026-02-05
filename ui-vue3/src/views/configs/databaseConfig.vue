@@ -22,8 +22,14 @@
         <!-- Datasource List -->
         <div class="config-list">
           <div class="list-header">
-            <h3>{{ t('config.databaseConfig.configList') }}</h3>
-            <span class="config-count">({{ configs.length }})</span>
+            <div>
+              <h3>{{ t('config.databaseConfig.configList') }}</h3>
+              <span class="config-count">({{ configs.length }})</span>
+            </div>
+            <button class="add-btn" @click="startAddConfig">
+              <Icon icon="carbon:add" />
+              {{ t('config.databaseConfig.newConfig') }}
+            </button>
           </div>
 
           <div class="search-box">
@@ -84,14 +90,6 @@
           <div v-if="!loading && filteredConfigs.length === 0" class="empty-state">
             <Icon icon="carbon:database" class="empty-icon" />
             <p>{{ searchQuery ? t('config.notFound') : t('config.databaseConfig.noConfigs') }}</p>
-          </div>
-
-          <!-- Add configuration button -->
-          <div class="add-config-button-container">
-            <button class="add-btn" @click="startAddConfig">
-              <Icon icon="carbon:add" />
-              {{ t('config.databaseConfig.newConfig') }}
-            </button>
           </div>
         </div>
 
@@ -485,10 +483,17 @@ onMounted(() => {
 .list-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   margin-bottom: 24px;
   padding-bottom: 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.list-header > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .list-header h3 {
@@ -704,20 +709,20 @@ onMounted(() => {
 }
 
 .add-btn {
-  width: 100%;
-  padding: 12px;
+  padding: 6px 12px;
   background: rgba(76, 175, 80, 0.2);
   border: 1px solid rgba(76, 175, 80, 0.4);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: #4caf50;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   transition: all 0.3s ease;
+  min-height: 32px;
 }
 
 .add-btn:hover {

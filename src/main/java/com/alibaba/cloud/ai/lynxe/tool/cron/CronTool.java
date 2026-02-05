@@ -18,6 +18,7 @@ package com.alibaba.cloud.ai.lynxe.tool.cron;
 import com.alibaba.cloud.ai.lynxe.cron.service.CronService;
 import com.alibaba.cloud.ai.lynxe.cron.vo.CronConfig;
 import com.alibaba.cloud.ai.lynxe.tool.AbstractBaseTool;
+import com.alibaba.cloud.ai.lynxe.tool.ToolStateInfo;
 import com.alibaba.cloud.ai.lynxe.tool.code.ToolExecuteResult;
 import com.alibaba.cloud.ai.lynxe.tool.i18n.ToolI18nService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -133,14 +134,15 @@ public class CronTool extends AbstractBaseTool<CronTool.CronToolInput> {
 
 	@Override
 	public String getServiceGroup() {
-		return "default-service-group";
+		return "default";
 	}
 
 	@Override
-	public String getCurrentToolStateString() {
-		return String.format("""
+	public ToolStateInfo getCurrentToolStateString() {
+		String stateString = String.format("""
 				Write scheduled task status: %s
 				""", "yes");
+		return new ToolStateInfo(null, stateString);
 	}
 
 	@Override

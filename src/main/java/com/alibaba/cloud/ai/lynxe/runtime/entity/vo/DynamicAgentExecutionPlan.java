@@ -126,9 +126,6 @@ public class DynamicAgentExecutionPlan extends AbstractExecutionPlan {
 			state.append("No execution parameters provided.\n\n");
 		}
 
-		state.append("- Historical Executed Step Records:\n");
-		state.append(getStepsExecutionStateStringFormat(onlyCompletedAndFirstInProgress));
-
 		return state.toString();
 	}
 

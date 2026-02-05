@@ -15,7 +15,9 @@
  */
 package com.alibaba.cloud.ai.lynxe.runtime.entity.vo;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -83,6 +85,11 @@ public class ExecutionContext {
 	 * Upload key for file upload context
 	 */
 	private String uploadKey;
+
+	/**
+	 * Recursive call chain tracking for subplan tools (list of planTemplateIds)
+	 */
+	private List<String> recursiveCallChain = new ArrayList<>();
 
 	/**
 	 * Get plan ID
@@ -246,6 +253,23 @@ public class ExecutionContext {
 	 */
 	public void setUploadKey(String uploadKey) {
 		this.uploadKey = uploadKey;
+	}
+
+	/**
+	 * Get recursive call chain
+	 * @return List of planTemplateIds representing the recursive call chain
+	 */
+	public List<String> getRecursiveCallChain() {
+		return recursiveCallChain;
+	}
+
+	/**
+	 * Set recursive call chain
+	 * @param recursiveCallChain List of planTemplateIds representing the recursive call
+	 * chain
+	 */
+	public void setRecursiveCallChain(List<String> recursiveCallChain) {
+		this.recursiveCallChain = recursiveCallChain != null ? new ArrayList<>(recursiveCallChain) : new ArrayList<>();
 	}
 
 }

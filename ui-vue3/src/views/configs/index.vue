@@ -24,9 +24,9 @@
             <Icon icon="carbon:arrow-left" />
             {{ $t('backHome') }}
           </button>
-          <LanguageSwitcher />
         </div>
         <div class="header-actions-right">
+          <LanguageSwitcher />
           <NamespaceSwitch />
         </div>
       </div>
@@ -68,25 +68,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { Icon } from '@iconify/vue'
-import { useI18n } from 'vue-i18n'
-import {
-  SettingOutlined,
-  BuildOutlined,
-  ToolOutlined,
-  DatabaseOutlined,
-  FolderOutlined,
-  FileTextOutlined,
-} from '@ant-design/icons-vue'
-import BasicConfig from './basicConfig.vue'
-import ModelConfig from './modelConfig.vue'
-import McpConfig from './mcpConfig.vue'
-import DatabaseConfig from './databaseConfig.vue'
 import LanguageSwitcher from '@/components/language-switcher/LanguageSwitcher.vue'
-import NamespaceConfig from './namespaceConfig.vue'
+import {
+  BuildOutlined,
+  DatabaseOutlined,
+  DeleteOutlined,
+  FileTextOutlined,
+  FolderOutlined,
+  SettingOutlined,
+  ToolOutlined,
+} from '@ant-design/icons-vue'
+import { Icon } from '@iconify/vue'
+import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import BasicConfig from './basicConfig.vue'
 import NamespaceSwitch from './components/namespaceSwitch.vue'
+import DatabaseCleanupConfig from './databaseCleanupConfig.vue'
+import DatabaseConfig from './databaseConfig.vue'
+import McpConfig from './mcpConfig.vue'
+import ModelConfig from './modelConfig.vue'
+import NamespaceConfig from './namespaceConfig.vue'
 import PlanTemplateConfig from './planTemplateConfig.vue'
 
 // Define component name for Vue linting rules
@@ -99,6 +101,7 @@ type ConfigComponent =
   | typeof ModelConfig
   | typeof McpConfig
   | typeof DatabaseConfig
+  | typeof DatabaseCleanupConfig
   | typeof NamespaceConfig
   | typeof PlanTemplateConfig
 
@@ -108,6 +111,7 @@ interface CategoryMap {
   model: typeof ModelConfig
   mcp: typeof McpConfig
   database: typeof DatabaseConfig
+  databaseCleanup: typeof DatabaseCleanupConfig
   namespace: typeof NamespaceConfig
   planTemplate: typeof PlanTemplateConfig
 }
@@ -124,6 +128,7 @@ const categoryMap: CategoryMap = {
   model: ModelConfig,
   mcp: McpConfig,
   database: DatabaseConfig,
+  databaseCleanup: DatabaseCleanupConfig,
   namespace: NamespaceConfig,
   planTemplate: PlanTemplateConfig,
 }
@@ -138,6 +143,12 @@ const categories = computed(() => [
   { key: 'model', label: t('config.categories.model'), icon: 'carbon:build-image' },
   { key: 'mcp', label: t('config.categories.mcp'), icon: 'carbon:tool-box' },
   { key: 'database', label: t('config.categories.database'), icon: 'carbon:database' },
+  {
+    key: 'databaseCleanup',
+    label: t('config.categories.databaseCleanup'),
+    disabled: false,
+    icon: 'carbon:trash-can',
+  },
   {
     key: 'namespace',
     label: t('config.categories.namespace'),
@@ -178,6 +189,7 @@ const getAntIcon = (key: string) => {
     model: BuildOutlined,
     mcp: ToolOutlined,
     database: DatabaseOutlined,
+    databaseCleanup: DeleteOutlined,
     namespace: FolderOutlined,
     planTemplate: FileTextOutlined,
   }
@@ -207,6 +219,12 @@ const getAntIcon = (key: string) => {
   width: 100%;
 }
 .header-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-actions-right {
   display: flex;
   align-items: center;
   gap: 14px;
